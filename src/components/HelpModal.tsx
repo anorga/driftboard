@@ -5,7 +5,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["N · T", "Sticky note · Text"],
   ["R · O · A", "Rectangle · Ellipse · Arrow"],
   ["P · L", "Pen · Laser pointer"],
-  ["/", "Cursor chat — talk at your cursor"],
+  ["/", "Cursor chat (talk at your cursor)"],
   ["⌘Z / ⇧⌘Z", "Undo / Redo (your changes only)"],
   ["⌘D", "Duplicate selection"],
   ["⌫", "Delete selection"],
