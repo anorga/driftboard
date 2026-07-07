@@ -33,6 +33,14 @@ export function CursorsOverlay({ awareness, camera }: { awareness: Awareness; ca
             >
               {state.user.name}
             </div>
+            {state.chat?.text ? (
+              <div
+                className="ml-4 mt-1 w-max max-w-64 rounded-2xl rounded-tl-sm px-3.5 py-2 text-[13px] font-medium text-white shadow-lg"
+                style={{ background: state.user.color }}
+              >
+                {state.chat.text}
+              </div>
+            ) : null}
           </div>
         );
       })}

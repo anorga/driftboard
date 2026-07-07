@@ -1,12 +1,22 @@
-export type Tool = "select" | "hand" | "sticky" | "rect" | "ellipse" | "pen";
+export type Tool =
+  | "select"
+  | "hand"
+  | "sticky"
+  | "text"
+  | "rect"
+  | "ellipse"
+  | "arrow"
+  | "pen"
+  | "laser";
 
-export type ElementType = "sticky" | "rect" | "ellipse" | "stroke";
+export type ElementType = "sticky" | "text" | "rect" | "ellipse" | "arrow" | "stroke";
 
 export interface BoardElement {
   id: string;
   type: ElementType;
   x: number;
   y: number;
+  /** For arrows, w/h are the (signed) offset from start to end point */
   w: number;
   h: number;
   /** Palette color id, e.g. "yellow" */
@@ -37,6 +47,12 @@ export interface UserInfo {
 export interface AwarenessState {
   user?: UserInfo;
   cursor?: { x: number; y: number } | null;
+  /** Cursor chat: live message shown next to the cursor */
+  chat?: { text: string; ts: number } | null;
+  /** Laser pointer position (world coords) */
+  laser?: { x: number; y: number; t: number } | null;
+  /** Element ids this user has selected */
+  selection?: string[];
 }
 
 export interface RecentBoard {

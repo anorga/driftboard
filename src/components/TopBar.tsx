@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Link2, Moon, Sun } from "lucide-react";
+import { Check, Download, Link2, Moon, Sun } from "lucide-react";
 import type { WebsocketProvider } from "y-websocket";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -17,6 +17,8 @@ interface Props {
   awareness: Awareness;
   user: UserInfo;
   onBoardNameChange?: (name: string) => void;
+  onExport: () => void;
+  onJumpTo: (clientId: number) => void;
 }
 
 function Avatar({ name, color, ring }: { name: string; color: string; ring?: boolean }) {
@@ -37,7 +39,7 @@ function Avatar({ name, color, ring }: { name: string; color: string; ring?: boo
   );
 }
 
-export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange }: Props) {
+export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange, onExport, onJumpTo }: Props) {
   const name = useMetaField(meta, "name", "");
   const peers = useRemotePeers(awareness);
   const status = useConnectionStatus(provider);
@@ -98,7 +100,14 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
           <div className="flex -space-x-2 pr-1">
             <Avatar name={user.name} color={user.color} ring />
             {peers.slice(0, 4).map(({ clientId, state }) => (
-              <Avatar key={clientId} name={state.user!.name} color={state.user!.color} />
+              <button
+                key={clientId}
+                onClick={() => onJumpTo(clientId)}
+                title={`Jump to ${state.user!.name}`}
+                className="cursor-pointer transition-transform hover:-translate-y-0.5"
+              >
+                <Avatar name={state.user!.name} color={state.user!.color} />
+              </button>
             ))}
             {peers.length > 4 && (
               <div className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-[var(--panel-solid)] bg-[var(--hover)] text-[11px] font-bold text-[var(--text)]">
@@ -106,6 +115,13 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
               </div>
             )}
           </div>
+          <button
+            onClick={onExport}
+            title="Export as PNG"
+            className="ml-1 flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)]"
+          >
+            <Download size={16} />
+          </button>
           <button
             onClick={share}
             className="ml-1 flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"

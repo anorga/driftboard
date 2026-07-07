@@ -9,12 +9,15 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 ## Features
 
 - **Infinite canvas** — pan (space-drag, hand tool, trackpad), zoom to cursor (pinch / ⌘-scroll), zoom-to-fit
-- **Sticky notes, rectangles, ellipses, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
+- **Sticky notes, text, rectangles, ellipses, arrows, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
 - **Real-time multiplayer** — live cursors with name tags, presence avatars, edits appear as they happen
+- **Cursor chat** — press `/` and talk right at your cursor, Figma-style
+- **Laser pointer** — present with a fading trail everyone sees live
+- **Remote selections** — see what each collaborator has selected, outlined in their color; click an avatar to jump to them
 - **Conflict-free sync** — concurrent edits always merge cleanly, even after working offline
 - **Scoped undo/redo** — undo only reverts *your* changes, never a collaborator's
 - **Offline-ready** — boards persist locally in IndexedDB and reconcile on reconnect
-- **Marquee & multi-select, resize handles, duplicate, recolor**, keyboard shortcuts for everything
+- **Export to PNG**, marquee & multi-select, resize handles, duplicate, recolor, keyboard shortcuts for everything
 - **Dark/light theme**, shareable board URLs, recent-boards list
 
 ## How it works
@@ -40,29 +43,33 @@ Open http://localhost:5173, create a board, then open the same board URL in a se
 
 ## Production / deploy
 
-The server serves the built client, so the whole app is a single Node process:
+The server serves the built client, so the whole app can run as a single Node process:
 
 ```bash
 npm run build
 npm start          # serves dist/ + WebSocket sync on $PORT
 ```
 
-Works out of the box on Render, Railway, or Fly (build command `npm install && npm run build`, start command `npm start`). To host the client separately (e.g. Vercel) point it at the sync server with `VITE_WS_URL=wss://your-sync-server`.
+**One-service deploy (Render):** this repo ships a [render.yaml](render.yaml) blueprint — create a new Blueprint on Render pointing at the repo and you're done. Also works on Railway or Fly with build `npm install --include=dev && npm run build`, start `npm start`.
 
-> Note: room state lives in server memory (clients re-seed it from IndexedDB on reconnect). For durable server-side persistence, add a LevelDB/Postgres snapshot layer in `server/index.ts`.
+**Split deploy (client on Vercel + sync on Render):** deploy the sync server with the blueprint above, then set `VITE_WS_URL=wss://<your-service>.onrender.com` in the Vercel project's environment variables and redeploy. The included [vercel.json](vercel.json) handles SPA route rewrites. Note the sync server must be a single long-lived process — room state is held in memory, so it can't run on serverless compute without adding external (e.g. Redis) coordination.
+
+> Room state lives in server memory (clients re-seed it from IndexedDB on reconnect). For durable server-side persistence, add a LevelDB/Postgres snapshot layer in `server/index.ts`.
 
 ## Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
 | `V` / `H` | Select / Hand |
-| `N` `R` `O` `P` | Sticky · Rectangle · Ellipse · Pen |
+| `N` `T` `R` `O` `A` `P` `L` | Sticky · Text · Rectangle · Ellipse · Arrow · Pen · Laser |
+| `/` | Cursor chat |
 | `⌘Z` / `⇧⌘Z` | Undo / Redo (your changes only) |
 | `⌘D` | Duplicate selection |
 | `⌫` | Delete selection |
 | `Space`-drag | Pan |
 | `⌘`-scroll / pinch | Zoom |
 | Double-click | Quick sticky note / edit text |
+| `?` | Shortcut help |
 
 ## Built by
 

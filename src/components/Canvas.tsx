@@ -20,6 +20,8 @@ import {
 } from "../lib/elements";
 import { ElementView } from "./ElementView";
 import { CursorsOverlay } from "./CursorsOverlay";
+import { LaserOverlay } from "./LaserOverlay";
+import { useRemotePeers } from "../lib/board";
 
 type HandleId = "nw" | "ne" | "sw" | "se";
 
@@ -28,6 +30,7 @@ type Drag =
   | { mode: "move"; startWorld: Point; orig: Map<string, { x: number; y: number }>; moved: boolean }
   | { mode: "marquee"; startWorld: Point; additive: boolean; base: Set<string> }
   | { mode: "shape"; id: string; startWorld: Point }
+  | { mode: "arrow"; id: string; startWorld: Point }
   | { mode: "pen"; id: string; lastWorld: Point }
   | { mode: "resize"; id: string; handle: HandleId; orig: Rect };
 
@@ -65,6 +68,10 @@ export function Canvas({
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [panning, setPanning] = useState(false);
   const [spaceDown, setSpaceDown] = useState(false);
+  const [chat, setChat] = useState<{ screen: Point; text: string } | null>(null);
+  const chatClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScreen = useRef<Point>({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const peers = useRemotePeers(conn.awareness);
 
   // Refs so window-level drag handlers never see stale state
   const cameraRef = useRef(camera);
@@ -100,6 +107,52 @@ export function Canvas({
   const toScreen = useCallback((e: { clientX: number; clientY: number }): Point => {
     const rect = viewportRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }, []);
+
+  // ---- Laser broadcast + cleanup when leaving the tool ----
+  const lastLaserSent = useRef(0);
+  const sendLaser = useCallback(
+    (screen: Point) => {
+      const now = performance.now();
+      if (now - lastLaserSent.current < 30) return;
+      lastLaserSent.current = now;
+      const w = screenToWorld(screen, cameraRef.current);
+      conn.awareness.setLocalStateField("laser", { x: w.x, y: w.y, t: Date.now() });
+    },
+    [conn],
+  );
+  useEffect(() => {
+    if (tool !== "laser") conn.awareness.setLocalStateField("laser", null);
+  }, [conn, tool]);
+
+  // ---- Cursor chat (press / to talk at your cursor) ----
+  const closeChat = useCallback(
+    (keepMessage: boolean) => {
+      setChat(null);
+      if (chatClearTimer.current) clearTimeout(chatClearTimer.current);
+      if (keepMessage) {
+        chatClearTimer.current = setTimeout(
+          () => conn.awareness.setLocalStateField("chat", null),
+          4000,
+        );
+      } else {
+        conn.awareness.setLocalStateField("chat", null);
+      }
+    },
+    [conn],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        setChat({ screen: lastScreen.current, text: "" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // ---- Space-to-pan ----
@@ -188,6 +241,13 @@ export function Canvas({
           });
           break;
         }
+        case "arrow": {
+          updateElement(conn.doc, conn.elements, drag.id, {
+            w: world.x - drag.startWorld.x,
+            h: world.y - drag.startWorld.y,
+          });
+          break;
+        }
         case "pen": {
           if (Math.hypot(world.x - drag.lastWorld.x, world.y - drag.lastWorld.y) < 0.75 / cameraRef.current.z) return;
           drag.lastWorld = world;
@@ -233,6 +293,16 @@ export function Canvas({
       if (w < 8 && h < 8) {
         // A click without a drag still yields a usable shape
         updateElement(conn.doc, conn.elements, drag.id, { w: 140, h: 140 });
+      }
+      setSelection(new Set([drag.id]));
+      setTool("select");
+    }
+    if (drag.mode === "arrow") {
+      const el = conn.elements.get(drag.id);
+      const w = (el?.get("w") as number) ?? 0;
+      const h = (el?.get("h") as number) ?? 0;
+      if (Math.hypot(w, h) < 12) {
+        updateElement(conn.doc, conn.elements, drag.id, { w: 160, h: 0 });
       }
       setSelection(new Set([drag.id]));
       setTool("select");
@@ -288,6 +358,21 @@ export function Canvas({
         setTool("select");
         return;
       }
+      if (t === "text") {
+        const id = addElement(conn.doc, conn.elements, {
+          type: "text",
+          x: world.x,
+          y: world.y - 16,
+          w: 280,
+          h: 96,
+          color: drawColorRef.current,
+          text: "",
+        });
+        setSelection(new Set([id]));
+        setEditingId(id);
+        setTool("select");
+        return;
+      }
       if (t === "rect" || t === "ellipse") {
         const id = addElement(conn.doc, conn.elements, {
           type: t,
@@ -300,6 +385,19 @@ export function Canvas({
         beginDrag({ mode: "shape", id, startWorld: world });
         return;
       }
+      if (t === "arrow") {
+        const id = addElement(conn.doc, conn.elements, {
+          type: "arrow",
+          x: world.x,
+          y: world.y,
+          w: 0,
+          h: 0,
+          color: drawColorRef.current,
+        });
+        beginDrag({ mode: "arrow", id, startWorld: world });
+        return;
+      }
+      if (t === "laser") return; // laser never creates elements
       if (t === "pen") {
         const pressure = e.pressure && e.pressure > 0 ? e.pressure : 0.5;
         const id = addElement(conn.doc, conn.elements, {
@@ -351,7 +449,7 @@ export function Canvas({
   const onElementDoubleClick = useCallback(
     (id: string) => {
       const el = elsRef.current.find((x) => x.id === id);
-      if (el?.type === "sticky") setEditingId(id);
+      if (el?.type === "sticky" || el?.type === "text") setEditingId(id);
     },
     [setEditingId],
   );
@@ -423,8 +521,24 @@ export function Canvas({
   const single = useMemo(() => {
     if (selection.size !== 1) return null;
     const el = els.find((x) => selection.has(x.id));
-    return el && el.type !== "stroke" ? el : null;
+    return el && el.type !== "stroke" && el.type !== "arrow" ? el : null;
   }, [els, selection]);
+
+  // Remote selections: outline what collaborators have selected, in their color
+  const remoteSelections = useMemo(() => {
+    const byId = new Map(els.map((e) => [e.id, e]));
+    const out: Array<{ key: string; color: string; x: number; y: number; w: number; h: number }> = [];
+    for (const { clientId, state } of peers) {
+      if (!state.selection?.length || !state.user) continue;
+      for (const id of state.selection) {
+        const el = byId.get(id);
+        if (!el) continue;
+        const b = elementBounds(el);
+        out.push({ key: `${clientId}-${id}`, color: state.user.color, x: b.x, y: b.y, w: b.w, h: b.h });
+      }
+    }
+    return out;
+  }, [els, peers]);
 
   const handleSize = 10 / camera.z;
   const handles: Array<{ id: HandleId; x: number; y: number; cursor: string }> = single
@@ -444,7 +558,10 @@ export function Canvas({
       onPointerDown={onCanvasPointerDown}
       onDoubleClick={onCanvasDoubleClick}
       onPointerMove={(e) => {
-        if (!dragRef.current) sendCursor(toScreen(e));
+        const screen = toScreen(e);
+        lastScreen.current = screen;
+        if (!dragRef.current) sendCursor(screen);
+        if (toolRef.current === "laser") sendLaser(screen);
       }}
       onPointerLeave={() => sendCursor(null)}
     >
@@ -483,6 +600,23 @@ export function Canvas({
           />
         ))}
 
+        {remoteSelections.map((s) => (
+          <div
+            key={s.key}
+            className="absolute rounded-md"
+            style={{
+              left: 0,
+              top: 0,
+              width: s.w,
+              height: s.h,
+              transform: `translate(${s.x}px, ${s.y}px)`,
+              border: `${1.5 / camera.z}px solid ${s.color}`,
+              opacity: 0.75,
+              pointerEvents: "none",
+            }}
+          />
+        ))}
+
         {marquee && (
           <div
             className="absolute"
@@ -501,6 +635,36 @@ export function Canvas({
       </div>
 
       <CursorsOverlay awareness={conn.awareness} camera={camera} />
+      <LaserOverlay awareness={conn.awareness} camera={camera} />
+
+      {chat && (
+        <div
+          className="absolute z-30"
+          style={{
+            left: Math.min(chat.screen.x, window.innerWidth - 280),
+            top: Math.min(chat.screen.y + 18, window.innerHeight - 60),
+          }}
+        >
+          <input
+            autoFocus
+            value={chat.text}
+            placeholder="Say something…"
+            onChange={(e) => {
+              const text = e.target.value;
+              setChat({ ...chat, text });
+              conn.awareness.setLocalStateField("chat", { text, ts: Date.now() });
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") closeChat(chat.text.trim().length > 0);
+              if (e.key === "Escape") closeChat(false);
+            }}
+            onBlur={() => closeChat(chat.text.trim().length > 0)}
+            className="w-64 rounded-full px-4 py-2 text-sm font-medium text-white shadow-xl outline-none placeholder:text-white/60"
+            style={{ background: user.color }}
+          />
+        </div>
+      )}
     </div>
   );
 }
