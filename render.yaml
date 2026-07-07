@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: driftboard
+    runtime: node
+    plan: free
+    # --include=dev so vite/tsc are available for the build even with NODE_ENV=production
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
