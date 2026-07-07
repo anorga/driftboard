@@ -4,7 +4,7 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 
 ![Driftboard](docs/screenshot.png)
 
-**Live demo:** _(add your deploy URL here)_
+**Live demo:** [driftboard-waem.onrender.com](https://driftboard-waem.onrender.com) — open it in two windows to see the sync. (Free-tier host: the first visit after idle takes ~30s to wake.)
 
 ## Features
 
