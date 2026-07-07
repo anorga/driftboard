@@ -46,6 +46,15 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
 }
 
 export function elementBounds(el: BoardElement): Rect {
+  // Arrows store a signed end offset in w/h; normalize to a positive rect
+  if (el.type === "arrow") {
+    return {
+      x: Math.min(el.x, el.x + el.w),
+      y: Math.min(el.y, el.y + el.h),
+      w: Math.abs(el.w),
+      h: Math.abs(el.h),
+    };
+  }
   return { x: el.x, y: el.y, w: el.w, h: el.h };
 }
 

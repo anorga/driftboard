@@ -2,9 +2,12 @@ import {
   MousePointer2,
   Hand,
   StickyNote,
+  Type,
   Square,
   Circle,
+  MoveUpRight,
   Pen,
+  Wand2,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -26,12 +29,15 @@ const TOOLS: Array<{ id: Tool; icon: React.ElementType; label: string; kbd: stri
   { id: "select", icon: MousePointer2, label: "Select", kbd: "V" },
   { id: "hand", icon: Hand, label: "Hand", kbd: "H" },
   { id: "sticky", icon: StickyNote, label: "Sticky note", kbd: "N" },
+  { id: "text", icon: Type, label: "Text", kbd: "T" },
   { id: "rect", icon: Square, label: "Rectangle", kbd: "R" },
   { id: "ellipse", icon: Circle, label: "Ellipse", kbd: "O" },
+  { id: "arrow", icon: MoveUpRight, label: "Arrow", kbd: "A" },
   { id: "pen", icon: Pen, label: "Pen", kbd: "P" },
+  { id: "laser", icon: Wand2, label: "Laser pointer", kbd: "L" },
 ];
 
-const DRAW_TOOLS: Tool[] = ["sticky", "rect", "ellipse", "pen"];
+const DRAW_TOOLS: Tool[] = ["sticky", "text", "rect", "ellipse", "arrow", "pen"];
 
 export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRedo, onUndo, onRedo }: Props) {
   return (

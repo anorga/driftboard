@@ -13,6 +13,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
     "lib0": "^0.2.117",
     "lucide-react": "^1.23.0",
     "nanoid": "^5.1.16",

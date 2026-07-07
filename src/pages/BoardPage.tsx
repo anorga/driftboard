@@ -14,14 +14,21 @@ import { Toolbar } from "../components/Toolbar";
 import { TopBar } from "../components/TopBar";
 import { ZoomControls } from "../components/ZoomControls";
 import { SelectionActions } from "../components/SelectionActions";
+import { HelpModal } from "../components/HelpModal";
+import { exportBoardPng } from "../lib/exportPng";
+import type { AwarenessState } from "../lib/types";
+import { HelpCircle } from "lucide-react";
 
 const TOOL_KEYS: Record<string, Tool> = {
   v: "select",
   h: "hand",
   n: "sticky",
+  t: "text",
   r: "rect",
   o: "ellipse",
+  a: "arrow",
   p: "pen",
+  l: "laser",
 };
 
 export function BoardPage() {
@@ -37,6 +44,7 @@ export function BoardPage() {
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawColor, setDrawColor] = useState("yellow");
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Remember this board on the landing page
   useEffect(() => {
@@ -49,6 +57,30 @@ export function BoardPage() {
       (window as unknown as Record<string, unknown>).__driftboard = conn;
     }
   }, [conn]);
+
+  // Share what we have selected so collaborators see it outlined in our color
+  useEffect(() => {
+    conn.awareness.setLocalStateField("selection", [...selection]);
+  }, [conn, selection]);
+
+  const jumpTo = useCallback(
+    (clientId: number) => {
+      const state = conn.awareness.getStates().get(clientId) as AwarenessState | undefined;
+      const target = state?.cursor ?? state?.laser;
+      if (!target) return;
+      setCamera((cam) => ({
+        x: target.x - window.innerWidth / 2 / cam.z,
+        y: target.y - window.innerHeight / 2 / cam.z,
+        z: cam.z,
+      }));
+    },
+    [conn],
+  );
+
+  const doExport = useCallback(
+    () => exportBoardPng(els, boardName),
+    [els, boardName],
+  );
 
   // Drop selection entries for elements deleted by collaborators
   useEffect(() => {
@@ -119,7 +151,12 @@ export function BoardPage() {
         stateRef.current.doDelete();
         return;
       }
+      if (e.key === "?") {
+        setHelpOpen((v) => !v);
+        return;
+      }
       if (e.key === "Escape") {
+        setHelpOpen(false);
         if (stateRef.current.editingId) setEditingId(null);
         else setSelection(new Set());
         setTool("select");
@@ -163,6 +200,8 @@ export function BoardPage() {
         awareness={conn.awareness}
         user={user}
         onBoardNameChange={(name) => touchRecentBoard(roomId, name || "Untitled board")}
+        onExport={doExport}
+        onJumpTo={jumpTo}
       />
       <SelectionActions
         count={selection.size}
@@ -181,6 +220,14 @@ export function BoardPage() {
         onRedo={() => conn.undo.redo()}
       />
       <ZoomControls camera={camera} setCamera={setCamera} els={els} viewportSize={viewportSize} />
+      <button
+        title="Keyboard shortcuts (?)"
+        onClick={() => setHelpOpen(true)}
+        className="absolute bottom-5 left-4 z-20 flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--panel)] text-[var(--muted)] shadow-lg backdrop-blur-md transition-colors hover:bg-[var(--hover)] hover:text-[var(--text)]"
+      >
+        <HelpCircle size={18} />
+      </button>
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

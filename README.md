@@ -9,12 +9,15 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 ## Features
 
 - **Infinite canvas** — pan (space-drag, hand tool, trackpad), zoom to cursor (pinch / ⌘-scroll), zoom-to-fit
-- **Sticky notes, rectangles, ellipses, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
+- **Sticky notes, text, rectangles, ellipses, arrows, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
 - **Real-time multiplayer** — live cursors with name tags, presence avatars, edits appear as they happen
+- **Cursor chat** — press `/` and talk right at your cursor, Figma-style
+- **Laser pointer** — present with a fading trail everyone sees live
+- **Remote selections** — see what each collaborator has selected, outlined in their color; click an avatar to jump to them
 - **Conflict-free sync** — concurrent edits always merge cleanly, even after working offline
 - **Scoped undo/redo** — undo only reverts *your* changes, never a collaborator's
 - **Offline-ready** — boards persist locally in IndexedDB and reconcile on reconnect
-- **Marquee & multi-select, resize handles, duplicate, recolor**, keyboard shortcuts for everything
+- **Export to PNG**, marquee & multi-select, resize handles, duplicate, recolor, keyboard shortcuts for everything
 - **Dark/light theme**, shareable board URLs, recent-boards list
 
 ## How it works
@@ -56,13 +59,15 @@ Works out of the box on Render, Railway, or Fly (build command `npm install && n
 | Key | Action |
 | --- | --- |
 | `V` / `H` | Select / Hand |
-| `N` `R` `O` `P` | Sticky · Rectangle · Ellipse · Pen |
+| `N` `T` `R` `O` `A` `P` `L` | Sticky · Text · Rectangle · Ellipse · Arrow · Pen · Laser |
+| `/` | Cursor chat |
 | `⌘Z` / `⇧⌘Z` | Undo / Redo (your changes only) |
 | `⌘D` | Duplicate selection |
 | `⌫` | Delete selection |
 | `Space`-drag | Pan |
 | `⌘`-scroll / pinch | Zoom |
 | Double-click | Quick sticky note / edit text |
+| `?` | Shortcut help |
 
 ## Built by
 
