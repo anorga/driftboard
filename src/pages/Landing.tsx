@@ -116,7 +116,7 @@ export function Landing() {
               style={{ animationDelay: "160ms" }}
             >
               Sticky notes, shapes, and freehand ink on an infinite canvas. Share a
-              link and every cursor, sketch, and edit appears live — even offline
+              link and every cursor, sketch, and edit appears live. Even offline
               edits merge cleanly when you're back.
             </p>
             <div className="rise mt-8 flex flex-wrap items-center gap-3" style={{ animationDelay: "240ms" }}>
@@ -184,16 +184,16 @@ export function Landing() {
             Small tool, serious engineering
           </h2>
           <p className="mb-8 max-w-lg text-[var(--muted)]">
-            Everything is built on CRDTs — the same conflict-free tech behind Figma-class
-            multiplayer — with a hand-rolled WebSocket sync server.
+            Everything is built on CRDTs, the same conflict-free tech behind Figma-class
+            multiplayer, with a hand-rolled WebSocket sync server.
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {/* CRDT card (wide) */}
             <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-6 sm:col-span-2">
               <h3 className="font-display mb-1.5 text-lg font-bold">Conflict-free by design</h3>
               <p className="mb-5 text-sm leading-relaxed text-[var(--muted)]">
-                Every element is a CRDT. Two people edit the same note at once — one
-                recolors, one moves — and both edits win. No locks, no "someone else is
+                Every element is a CRDT. Two people edit the same note at once: one
+                recolors, one moves, and both edits win. No locks, no "someone else is
                 editing", no lost work.
               </p>
               <div className="flex items-center justify-center gap-3 text-[12px] font-semibold">
@@ -220,7 +220,7 @@ export function Landing() {
               <p className="text-sm leading-relaxed text-[var(--muted)]">
                 Press <kbd className="rounded border border-[var(--border)] bg-[var(--hover)] px-1.5 text-[11px]">/</kbd> to
                 talk at your cursor. Grab the laser <Wand2 size={13} className="inline" /> to
-                present — everyone sees the trail live.
+                present and everyone sees the trail live.
               </p>
             </div>
 
@@ -231,8 +231,8 @@ export function Landing() {
               </div>
               <h3 className="font-display mb-1.5 font-bold">Offline-first</h3>
               <p className="text-sm leading-relaxed text-[var(--muted)]">
-                Boards persist in IndexedDB. Lose your connection, keep sketching —
-                everything reconciles the moment you're back.
+                Boards persist in IndexedDB. Lose your connection, keep sketching.
+                Everything reconciles the moment you're back.
               </p>
             </div>
 
@@ -244,7 +244,7 @@ export function Landing() {
               <h3 className="font-display mb-1.5 font-bold">Polite undo</h3>
               <p className="text-sm leading-relaxed text-[var(--muted)]">
                 <kbd className="rounded border border-[var(--border)] bg-[var(--hover)] px-1.5 text-[11px]">⌘Z</kbd> only
-                reverts <em>your</em> changes — never a teammate's. The undo stack is
+                reverts <em>your</em> changes, never a teammate's. The undo stack is
                 CRDT-aware.
               </p>
             </div>
@@ -255,7 +255,7 @@ export function Landing() {
               <p className="max-w-xl text-sm leading-relaxed text-[var(--muted)]">
                 Named live cursors, avatar stacks, remote selection outlines in each
                 person's color, and click-to-jump to any collaborator. You always know
-                who's looking at what — with zero configuration.
+                who's looking at what, with zero configuration.
               </p>
             </div>
           </div>
@@ -265,7 +265,7 @@ export function Landing() {
         <section className="pb-20">
           <div className="grid gap-4 sm:grid-cols-3">
             {[
-              ["1", "Create a board", "One click. The URL is the board — no account, no setup."],
+              ["1", "Create a board", "One click. The URL is the board. No account, no setup."],
               ["2", "Share the link", "Anyone who opens it is instantly in, cursor and all."],
               ["3", "Think together", "Sketch, arrange, present. Export to PNG when you're done."],
             ].map(([n, title, body]) => (
