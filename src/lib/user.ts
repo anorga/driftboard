@@ -30,13 +30,21 @@ export function getRecentBoards(): RecentBoard[] {
   return [];
 }
 
-export function touchRecentBoard(id: string, name: string) {
-  const rest = getRecentBoards().filter((b) => b.id !== id);
-  const next = [{ id, name, visitedAt: Date.now() }, ...rest].slice(0, 12);
+export function touchRecentBoard(id: string, name: string, thumb?: string) {
+  const all = getRecentBoards();
+  const existing = all.find((b) => b.id === id);
+  const rest = all.filter((b) => b.id !== id);
+  const entry: RecentBoard = { id, name, visitedAt: Date.now(), thumb: thumb ?? existing?.thumb };
+  const next = [entry, ...rest].slice(0, 12);
   try {
     localStorage.setItem(RECENT_KEY, JSON.stringify(next));
   } catch {
-    // ignore quota errors
+    // Quota exceeded (thumbnails add up) — retry without them
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next.map(({ thumb: _thumb, ...b }) => b)));
+    } catch {
+      // still failing (private mode) — give up quietly
+    }
   }
 }
 

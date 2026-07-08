@@ -14,10 +14,13 @@ import {
 import {
   addElement,
   appendStrokePoints,
+  deleteElements,
   normalizeStroke,
   updateElement,
   updateElements,
 } from "../lib/elements";
+import { fitDimensions, isImageFile, loadImage, IMAGE_DEFAULT_MAX_W } from "../lib/images";
+import { hitTestBindTarget } from "../lib/arrows";
 import { ElementView } from "./ElementView";
 import { CursorsOverlay } from "./CursorsOverlay";
 import { LaserOverlay } from "./LaserOverlay";
@@ -30,7 +33,7 @@ type Drag =
   | { mode: "move"; startWorld: Point; orig: Map<string, { x: number; y: number }>; moved: boolean }
   | { mode: "marquee"; startWorld: Point; additive: boolean; base: Set<string> }
   | { mode: "shape"; id: string; startWorld: Point }
-  | { mode: "arrow"; id: string; startWorld: Point }
+  | { mode: "arrow"; id: string; startWorld: Point; startRef?: string }
   | { mode: "pen"; id: string; lastWorld: Point }
   | { mode: "resize"; id: string; handle: HandleId; orig: Rect };
 
@@ -67,6 +70,10 @@ export function Canvas({
   const dragRef = useRef<Drag | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [panning, setPanning] = useState(false);
+  // Shape an in-flight arrow would attach to on release (highlighted)
+  const [snapId, setSnapId] = useState<string | null>(null);
+  const snapIdRef = useRef<string | null>(null);
+  snapIdRef.current = snapId;
   const [spaceDown, setSpaceDown] = useState(false);
   const [chat, setChat] = useState<{ screen: Point; text: string } | null>(null);
   const chatClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -155,6 +162,53 @@ export function Canvas({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // ---- Images: paste anywhere, or drop files onto the canvas ----
+  const insertImages = useCallback(
+    async (files: File[], screen: Point) => {
+      let offset = 0;
+      const ids: string[] = [];
+      for (const file of files) {
+        try {
+          const img = await loadImage(file);
+          const dims = fitDimensions(img.w, img.h, IMAGE_DEFAULT_MAX_W);
+          const world = screenToWorld(screen, cameraRef.current);
+          const id = addElement(conn.doc, conn.elements, {
+            type: "image",
+            x: world.x - dims.w / 2 + offset,
+            y: world.y - dims.h / 2 + offset,
+            w: dims.w,
+            h: dims.h,
+            color: "yellow",
+            src: img.src,
+          });
+          ids.push(id);
+          offset += 24;
+        } catch {
+          // not decodable as an image — skip it
+        }
+      }
+      if (ids.length > 0) {
+        setSelection(new Set(ids));
+        setTool("select");
+        conn.undo.stopCapturing();
+      }
+    },
+    [conn, setSelection, setTool],
+  );
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable) return;
+      const files = [...(e.clipboardData?.files ?? [])].filter(isImageFile);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void insertImages(files, lastScreen.current);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [insertImages]);
+
   // ---- Space-to-pan ----
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -192,6 +246,45 @@ export function Canvas({
     vp.addEventListener("wheel", onWheel, { passive: false });
     return () => vp.removeEventListener("wheel", onWheel);
   }, [setCamera]);
+
+  // ---- Touch: two fingers pinch-zoom / pan (single finger uses the tools) ----
+  const touchesRef = useRef(new Map<number, Point>());
+  const pinchRef = useRef<{ lastDist: number; lastCenter: Point } | null>(null);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !touchesRef.current.has(e.pointerId)) return;
+      touchesRef.current.set(e.pointerId, toScreen(e));
+      const pinch = pinchRef.current;
+      if (!pinch || touchesRef.current.size < 2) return;
+      const [a, b] = [...touchesRef.current.values()];
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      setCamera((cam) => {
+        const zoomed = zoomAt(cam, center, cam.z * (dist / pinch.lastDist));
+        return {
+          ...zoomed,
+          x: zoomed.x - (center.x - pinch.lastCenter.x) / zoomed.z,
+          y: zoomed.y - (center.y - pinch.lastCenter.y) / zoomed.z,
+        };
+      });
+      pinch.lastDist = dist;
+      pinch.lastCenter = center;
+    };
+    const onUp = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touchesRef.current.delete(e.pointerId);
+      if (touchesRef.current.size < 2) pinchRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [setCamera, toScreen]);
 
   // ---- Drag machinery: window listeners live only during a gesture ----
   const onWindowMove = useCallback(
@@ -246,6 +339,9 @@ export function Canvas({
             w: world.x - drag.startWorld.x,
             h: world.y - drag.startWorld.y,
           });
+          // Hovering a shape? Highlight it as the attach target.
+          const target = hitTestBindTarget(elsRef.current, world, drag.startRef);
+          setSnapId(target && target.id !== drag.id ? target.id : null);
           break;
         }
         case "pen": {
@@ -298,11 +394,17 @@ export function Canvas({
       setTool("select");
     }
     if (drag.mode === "arrow") {
-      const el = conn.elements.get(drag.id);
-      const w = (el?.get("w") as number) ?? 0;
-      const h = (el?.get("h") as number) ?? 0;
-      if (Math.hypot(w, h) < 12) {
-        updateElement(conn.doc, conn.elements, drag.id, { w: 160, h: 0 });
+      const snap = snapIdRef.current;
+      setSnapId(null);
+      if (snap) {
+        updateElement(conn.doc, conn.elements, drag.id, { endRef: snap });
+      } else {
+        const el = conn.elements.get(drag.id);
+        const w = (el?.get("w") as number) ?? 0;
+        const h = (el?.get("h") as number) ?? 0;
+        if (Math.hypot(w, h) < 12) {
+          updateElement(conn.doc, conn.elements, drag.id, { w: 160, h: 0 });
+        }
       }
       setSelection(new Set([drag.id]));
       setTool("select");
@@ -321,9 +423,40 @@ export function Canvas({
     [conn, onWindowMove, onWindowUp],
   );
 
+  // Second touch lands anywhere on the canvas: abandon the single-finger
+  // gesture (deleting a just-started element, which was accidental) and
+  // switch to pinching. Capture phase, so element handlers can't swallow it.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (touchesRef.current.size >= 2) return; // ignore third+ fingers
+      touchesRef.current.set(e.pointerId, toScreen(e));
+      if (touchesRef.current.size !== 2) return;
+      const drag = dragRef.current;
+      if (drag && (drag.mode === "pen" || drag.mode === "shape" || drag.mode === "arrow")) {
+        deleteElements(conn.doc, conn.elements, [drag.id]);
+      }
+      dragRef.current = null;
+      onWindowUp(); // detach drag listeners, reset panning
+      setMarquee(null);
+      setSnapId(null);
+      const [a, b] = [...touchesRef.current.values()];
+      pinchRef.current = {
+        lastDist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+        lastCenter: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      };
+    };
+    vp.addEventListener("pointerdown", onDown, { capture: true });
+    return () => vp.removeEventListener("pointerdown", onDown, { capture: true });
+  }, [conn, onWindowUp, toScreen]);
+
   // ---- Canvas (empty space) pointer down ----
   const onCanvasPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // While pinching, single-pointer tools stay out of the way
+      if (e.pointerType === "touch" && touchesRef.current.size >= 2) return;
       if (editingId) setEditingId(null);
       const screen = toScreen(e);
       const world = screenToWorld(screen, cameraRef.current);
@@ -386,6 +519,8 @@ export function Canvas({
         return;
       }
       if (t === "arrow") {
+        // Starting on a shape binds the arrow's tail to it
+        const startTarget = hitTestBindTarget(elsRef.current, world);
         const id = addElement(conn.doc, conn.elements, {
           type: "arrow",
           x: world.x,
@@ -393,8 +528,9 @@ export function Canvas({
           w: 0,
           h: 0,
           color: drawColorRef.current,
+          startRef: startTarget?.id,
         });
-        beginDrag({ mode: "arrow", id, startWorld: world });
+        beginDrag({ mode: "arrow", id, startWorld: world, startRef: startTarget?.id });
         return;
       }
       if (t === "laser") return; // laser never creates elements
@@ -420,6 +556,7 @@ export function Canvas({
   // ---- Element pointer down (select tool only) ----
   const onElementPointerDown = useCallback(
     (e: React.PointerEvent, id: string) => {
+      if (e.pointerType === "touch" && touchesRef.current.size >= 2) return;
       if (toolRef.current !== "select" || e.button !== 0) return;
       e.stopPropagation();
       if (editingId === id) return;
@@ -436,6 +573,22 @@ export function Canvas({
       next = selectionRef.current.has(id) ? new Set(selectionRef.current) : new Set([id]);
       setSelection(next);
 
+      // Grabbing a bound arrow pulls it off its shapes — unless the shapes
+      // are moving with it, in which case the binding survives the move.
+      const detachPatches: Array<{ id: string; patch: Partial<BoardElement> }> = [];
+      for (const el of elsRef.current) {
+        if (!next.has(el.id) || el.type !== "arrow" || (!el.startRef && !el.endRef)) continue;
+        const detachStart = !!el.startRef && !next.has(el.startRef);
+        const detachEnd = !!el.endRef && !next.has(el.endRef);
+        if (!detachStart && !detachEnd) continue;
+        // el.x/y/w/h are the resolved endpoints — freeze them before unbinding
+        const patch: Partial<BoardElement> = { x: el.x, y: el.y, w: el.w, h: el.h };
+        if (detachStart) patch.startRef = undefined;
+        if (detachEnd) patch.endRef = undefined;
+        detachPatches.push({ id: el.id, patch });
+      }
+      if (detachPatches.length > 0) updateElements(conn.doc, conn.elements, detachPatches);
+
       const orig = new Map<string, { x: number; y: number }>();
       for (const el of elsRef.current) {
         if (next.has(el.id)) orig.set(el.id, { x: el.x, y: el.y });
@@ -443,7 +596,7 @@ export function Canvas({
       const world = screenToWorld(toScreen(e), cameraRef.current);
       beginDrag({ mode: "move", startWorld: world, orig, moved: false });
     },
-    [beginDrag, editingId, setEditingId, setSelection, toScreen],
+    [beginDrag, conn, editingId, setEditingId, setSelection, toScreen],
   );
 
   const onElementDoubleClick = useCallback(
@@ -557,6 +710,13 @@ export function Canvas({
       style={viewportStyle}
       onPointerDown={onCanvasPointerDown}
       onDoubleClick={onCanvasDoubleClick}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        const files = [...e.dataTransfer.files].filter(isImageFile);
+        if (files.length === 0) return;
+        e.preventDefault();
+        void insertImages(files, toScreen(e));
+      }}
       onPointerMove={(e) => {
         const screen = toScreen(e);
         lastScreen.current = screen;
@@ -599,6 +759,27 @@ export function Canvas({
             onPointerDown={(e) => onResizeHandleDown(e, single!.id, h.id)}
           />
         ))}
+
+        {snapId &&
+          (() => {
+            const el = els.find((x) => x.id === snapId);
+            if (!el) return null;
+            const b = elementBounds(el);
+            return (
+              <div
+                className="absolute rounded-lg"
+                style={{
+                  left: 0,
+                  top: 0,
+                  width: b.w + 12,
+                  height: b.h + 12,
+                  transform: `translate(${b.x - 6}px, ${b.y - 6}px)`,
+                  border: `${2 / camera.z}px dashed var(--accent)`,
+                  pointerEvents: "none",
+                }}
+              />
+            );
+          })()}
 
         {remoteSelections.map((s) => (
           <div

@@ -27,6 +27,9 @@ export interface NewElement {
   text?: string;
   points?: number[];
   size?: number;
+  src?: string;
+  startRef?: string;
+  endRef?: string;
 }
 
 export function addElement(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, el: NewElement): string {
@@ -43,6 +46,9 @@ export function addElement(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, el: NewE
     ymap.set("order", nextOrder(elements));
     if (el.text !== undefined) ymap.set("text", el.text);
     if (el.size !== undefined) ymap.set("size", el.size);
+    if (el.src !== undefined) ymap.set("src", el.src);
+    if (el.startRef !== undefined) ymap.set("startRef", el.startRef);
+    if (el.endRef !== undefined) ymap.set("endRef", el.endRef);
     if (el.points !== undefined) {
       const arr = new Y.Array<number>();
       arr.push(el.points);
@@ -64,7 +70,8 @@ export function updateElement(
   doc.transact(() => {
     for (const [k, v] of Object.entries(patch)) {
       if (k === "points") continue; // points are append-only via appendStrokePoints
-      el.set(k, v);
+      if (v === undefined) el.delete(k);
+      else el.set(k, v);
     }
   }, LOCAL_ORIGIN);
 }
@@ -80,7 +87,8 @@ export function updateElements(
       if (!el) continue;
       for (const [k, v] of Object.entries(patch)) {
         if (k === "points") continue;
-        el.set(k, v);
+        if (v === undefined) el.delete(k);
+        else el.set(k, v);
       }
     }
   }, LOCAL_ORIGIN);
@@ -98,12 +106,16 @@ export function duplicateElements(
   ids: Iterable<string>,
 ): string[] {
   const newIds: string[] = [];
+  // Map old ids to new so arrow bindings follow shapes duplicated with them.
+  const idMap = new Map<string, string>();
+  for (const id of ids) {
+    if (elements.has(id)) idMap.set(id, nanoid(10));
+  }
   doc.transact(() => {
-    for (const id of ids) {
+    for (const [id, newId] of idMap) {
       const src = elements.get(id);
       if (!src) continue;
       const json = src.toJSON() as BoardElement;
-      const newId = nanoid(10);
       const ymap = new Y.Map<unknown>();
       ymap.set("id", newId);
       ymap.set("type", json.type);
@@ -115,6 +127,9 @@ export function duplicateElements(
       ymap.set("order", nextOrder(elements));
       if (json.text !== undefined) ymap.set("text", json.text);
       if (json.size !== undefined) ymap.set("size", json.size);
+      if (json.src !== undefined) ymap.set("src", json.src);
+      if (json.startRef !== undefined) ymap.set("startRef", idMap.get(json.startRef) ?? json.startRef);
+      if (json.endRef !== undefined) ymap.set("endRef", idMap.get(json.endRef) ?? json.endRef);
       if (json.points !== undefined) {
         const arr = new Y.Array<number>();
         arr.push([...json.points]);

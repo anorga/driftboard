@@ -21,10 +21,30 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return out;
 }
 
-/** Render the board to a PNG and trigger a download. */
-export function exportBoardPng(els: BoardElement[], boardName: string) {
-  if (els.length === 0) return;
+function loadImageEl(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
 
+/** Decode every image element up front so drawing can stay synchronous. */
+async function loadImages(els: BoardElement[]): Promise<Map<string, HTMLImageElement>> {
+  const out = new Map<string, HTMLImageElement>();
+  await Promise.all(
+    els
+      .filter((el) => el.type === "image" && el.src)
+      .map(async (el) => {
+        const img = await loadImageEl(el.src!);
+        if (img) out.set(el.id, img);
+      }),
+  );
+  return out;
+}
+
+export function boardBounds(els: BoardElement[]): { x: number; y: number; w: number; h: number } {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const el of els) {
     const b = elementBounds(el);
@@ -33,20 +53,15 @@ export function exportBoardPng(els: BoardElement[], boardName: string) {
     maxX = Math.max(maxX, b.x + b.w);
     maxY = Math.max(maxY, b.y + b.h);
   }
-  const pad = 64;
-  const w = maxX - minX + pad * 2;
-  const h = maxY - minY + pad * 2;
-  const scale = Math.min(2, 8000 / Math.max(w, h));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
 
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(w * scale);
-  canvas.height = Math.round(h * scale);
-  const ctx = canvas.getContext("2d")!;
-  ctx.scale(scale, scale);
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, w, h);
-  ctx.translate(pad - minX, pad - minY);
-
+/** Draw elements in world coordinates; the caller sets up the transform. */
+function drawElements(
+  ctx: CanvasRenderingContext2D,
+  els: BoardElement[],
+  images: Map<string, HTMLImageElement>,
+) {
   const sorted = [...els].sort((a, b) => a.order - b.order);
   for (const el of sorted) {
     const color = getColor(el.color);
@@ -118,6 +133,17 @@ export function exportBoardPng(els: BoardElement[], boardName: string) {
         ctx.fill();
         break;
       }
+      case "image": {
+        const img = images.get(el.id);
+        if (!img) break;
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(el.x, el.y, el.w, el.h, 6);
+        ctx.clip();
+        ctx.drawImage(img, el.x, el.y, el.w, el.h);
+        ctx.restore();
+        break;
+      }
       case "stroke": {
         if (!el.points?.length) break;
         ctx.save();
@@ -129,9 +155,64 @@ export function exportBoardPng(els: BoardElement[], boardName: string) {
       }
     }
   }
+}
+
+/** Render the board to a PNG and trigger a download. */
+export async function exportBoardPng(els: BoardElement[], boardName: string) {
+  if (els.length === 0) return;
+  const images = await loadImages(els);
+
+  const bounds = boardBounds(els);
+  const pad = 64;
+  const w = bounds.w + pad * 2;
+  const h = bounds.h + pad * 2;
+  const scale = Math.min(2, 8000 / Math.max(w, h));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext("2d")!;
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.translate(pad - bounds.x, pad - bounds.y);
+  drawElements(ctx, els, images);
 
   const a = document.createElement("a");
   a.href = canvas.toDataURL("image/png");
   a.download = `${(boardName || "driftboard").replace(/[^\w\- ]+/g, "").trim() || "driftboard"}.png`;
   a.click();
+}
+
+/**
+ * Small JPEG preview of the board for the recent-boards list. Returns null
+ * for empty boards.
+ */
+export async function renderBoardThumbnail(
+  els: BoardElement[],
+  width = 320,
+  height = 200,
+): Promise<string | null> {
+  if (els.length === 0) return null;
+  const images = await loadImages(els);
+
+  const bounds = boardBounds(els);
+  const pad = 32;
+  const w = bounds.w + pad * 2;
+  const h = bounds.h + pad * 2;
+  const scale = Math.min(width / w, height / h, 1);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  // Center the (contained) board in the thumbnail
+  ctx.translate((width - w * scale) / 2, (height - h * scale) / 2);
+  ctx.scale(scale, scale);
+  ctx.translate(pad - bounds.x, pad - bounds.y);
+  drawElements(ctx, els, images);
+
+  return canvas.toDataURL("image/jpeg", 0.7);
 }

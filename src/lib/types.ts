@@ -9,7 +9,7 @@ export type Tool =
   | "pen"
   | "laser";
 
-export type ElementType = "sticky" | "text" | "rect" | "ellipse" | "arrow" | "stroke";
+export type ElementType = "sticky" | "text" | "rect" | "ellipse" | "arrow" | "stroke" | "image";
 
 export interface BoardElement {
   id: string;
@@ -27,6 +27,11 @@ export interface BoardElement {
   points?: number[];
   /** Stroke brush size */
   size?: number;
+  /** Image data URL */
+  src?: string;
+  /** Arrow endpoint bindings: element ids the arrow stays attached to */
+  startRef?: string;
+  endRef?: string;
   /** z-order */
   order: number;
 }
@@ -59,4 +64,6 @@ export interface RecentBoard {
   id: string;
   name: string;
   visitedAt: number;
+  /** Small JPEG data URL preview */
+  thumb?: string;
 }

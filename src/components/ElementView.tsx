@@ -129,6 +129,31 @@ export const ElementView = memo(function ElementView({
     );
   }
 
+  if (el.type === "image") {
+    return (
+      <div
+        data-element-id={el.id}
+        style={{
+          ...base,
+          borderRadius: 6,
+          overflow: "hidden",
+          boxShadow: "0 6px 16px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.1)",
+        }}
+        className="select-none"
+        onPointerDown={(e) => onPointerDown(e, el.id)}
+      >
+        <img
+          src={el.src}
+          alt=""
+          draggable={false}
+          className="h-full w-full select-none"
+          style={{ objectFit: "fill" }}
+        />
+        {selectionRing}
+      </div>
+    );
+  }
+
   if (el.type === "arrow") {
     // w/h hold the signed end offset; the wrapper sits at the start point
     const pad = 8;

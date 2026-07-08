@@ -59,13 +59,13 @@ export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRe
           ))}
         </div>
       )}
-      <div className="pointer-events-auto flex items-center gap-1 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-xl backdrop-blur-md">
+      <div className="pointer-events-auto flex max-w-[calc(100vw-12px)] items-center gap-0.5 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-xl backdrop-blur-md sm:gap-1">
         {TOOLS.map(({ id, icon: Icon, label, kbd }) => (
           <button
             key={id}
             title={`${label} (${kbd})`}
             onClick={() => setTool(id)}
-            className={`group relative flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
+            className={`group relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:w-10 ${
               tool === id
                 ? "bg-[var(--accent)] text-white"
                 : "text-[var(--text)] hover:bg-[var(--hover)]"
@@ -82,7 +82,7 @@ export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRe
           title="Undo (⌘Z)"
           onClick={onUndo}
           disabled={!canUndo}
-          className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30 sm:h-10 sm:w-10"
         >
           <Undo2 size={19} strokeWidth={2.1} />
         </button>
@@ -90,7 +90,7 @@ export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRe
           title="Redo (⇧⌘Z)"
           onClick={onRedo}
           disabled={!canRedo}
-          className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30 sm:h-10 sm:w-10"
         >
           <Redo2 size={19} strokeWidth={2.1} />
         </button>

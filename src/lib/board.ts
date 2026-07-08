@@ -83,17 +83,41 @@ export function useBoardConnection(roomId: string): BoardConnection {
   return conn;
 }
 
-/** Reactive list of board elements, sorted by z-order. */
+/**
+ * Reactive list of board elements, sorted by z-order.
+ *
+ * Converted JSON is cached per element and only invalidated for elements a
+ * change actually touched, so unchanged elements keep their object identity
+ * and the memoized ElementView skips re-rendering them. Without this, every
+ * appended pen-stroke point would re-serialize the whole board.
+ */
 export function useElements(elements: Y.Map<Y.Map<unknown>>): BoardElement[] {
+  const [cache] = useState(() => new WeakMap<Y.Map<unknown>, BoardElement>());
   const [, setTick] = useState(0);
   useEffect(() => {
-    const onChange = () => setTick((t) => t + 1);
+    const onChange = (events: Y.YEvent<Y.Map<unknown>>[]) => {
+      for (const ev of events) {
+        // Walk up to the element-level Y.Map that owns this change (the
+        // change may be inside a nested type, e.g. a stroke's points array).
+        let target = ev.target as unknown as { parent: unknown } | null;
+        while (target && target.parent !== elements) {
+          target = (target.parent as { parent: unknown } | null) ?? null;
+        }
+        if (target) cache.delete(target as unknown as Y.Map<unknown>);
+      }
+      setTick((t) => t + 1);
+    };
     elements.observeDeep(onChange);
     return () => elements.unobserveDeep(onChange);
-  }, [elements]);
+  }, [elements, cache]);
   const list: BoardElement[] = [];
   elements.forEach((el) => {
-    list.push(el.toJSON() as BoardElement);
+    let json = cache.get(el);
+    if (!json) {
+      json = el.toJSON() as BoardElement;
+      cache.set(el, json);
+    }
+    list.push(json);
   });
   list.sort((a, b) => a.order - b.order);
   return list;
