@@ -2,14 +2,9 @@
  * Driftboard sync server.
  *
  * A WebSocket relay implementing the y-websocket wire protocol: each board is
- * a room (the URL path is the room name) holding one Yjs doc plus an
- * awareness instance (live cursors / presence). Document updates are applied
- * server-side and fanned out to every client in the room; awareness updates
- * are relayed the same way.
- *
- * Rooms live in memory; clients also persist boards locally via IndexedDB and
- * re-seed the server on reconnect, so a restart doesn't lose work for anyone
- * who comes back.
+ * a room (the URL path is the room name); see server/rooms.ts. Snapshots are
+ * persisted to disk (server/persistence.ts) so boards survive restarts, and
+ * clients additionally re-seed from IndexedDB on reconnect.
  *
  * In production it also serves the built client from ../dist, so the whole
  * app deploys as a single Node process.
@@ -18,131 +13,24 @@ import http from "node:http";
 import path from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer, WebSocket } from "ws";
-import * as Y from "yjs";
-import * as syncProtocol from "y-protocols/sync";
-import * as awarenessProtocol from "y-protocols/awareness";
-import * as encoding from "lib0/encoding";
-import * as decoding from "lib0/decoding";
+import { WebSocketServer } from "ws";
+import { RoomManager, ROOM_NAME_RE } from "./rooms.ts";
+import { SnapshotStore } from "./persistence.ts";
 
 const PORT = Number(process.env.PORT) || 1234;
 const HOST = process.env.HOST || "0.0.0.0";
+const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 1000;
+// Generous enough for boards with embedded images, small enough to stop abuse.
+const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 
-// y-websocket message types
-const MESSAGE_SYNC = 0;
-const MESSAGE_AWARENESS = 1;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-class Room {
-  doc = new Y.Doc();
-  awareness = new awarenessProtocol.Awareness(this.doc);
-  conns = new Map<WebSocket, Set<number>>();
-
-  constructor(public name: string) {
-    this.awareness.setLocalState(null);
-
-    // Fan document updates out to the room (origin included: applying an
-    // update a client already has is a cheap no-op in Yjs).
-    this.doc.on("update", (update: Uint8Array) => {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      syncProtocol.writeUpdate(encoder, update);
-      this.broadcast(encoding.toUint8Array(encoder));
-    });
-
-    this.awareness.on(
-      "update",
-      ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
-        const changed = added.concat(updated, removed);
-        if (origin instanceof WebSocket) {
-          const owned = this.conns.get(origin);
-          if (owned) {
-            added.forEach((id) => owned.add(id));
-            removed.forEach((id) => owned.delete(id));
-          }
-        }
-        const encoder = encoding.createEncoder();
-        encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
-        encoding.writeVarUint8Array(
-          encoder,
-          awarenessProtocol.encodeAwarenessUpdate(this.awareness, changed),
-        );
-        this.broadcast(encoding.toUint8Array(encoder));
-      },
-    );
-  }
-
-  broadcast(msg: Uint8Array) {
-    this.conns.forEach((_, conn) => {
-      if (conn.readyState === WebSocket.OPEN) conn.send(msg);
-    });
-  }
-
-  join(conn: WebSocket) {
-    this.conns.set(conn, new Set());
-
-    // Step 1: ask the client what it has; it replies with SyncStep2.
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, MESSAGE_SYNC);
-    syncProtocol.writeSyncStep1(encoder, this.doc);
-    conn.send(encoding.toUint8Array(encoder));
-
-    // Share current presence with the newcomer.
-    const states = this.awareness.getStates();
-    if (states.size > 0) {
-      const awEncoder = encoding.createEncoder();
-      encoding.writeVarUint(awEncoder, MESSAGE_AWARENESS);
-      encoding.writeVarUint8Array(
-        awEncoder,
-        awarenessProtocol.encodeAwarenessUpdate(this.awareness, [...states.keys()]),
-      );
-      conn.send(encoding.toUint8Array(awEncoder));
-    }
-  }
-
-  message(conn: WebSocket, data: Uint8Array) {
-    const decoder = decoding.createDecoder(data);
-    switch (decoding.readVarUint(decoder)) {
-      case MESSAGE_SYNC: {
-        const encoder = encoding.createEncoder();
-        encoding.writeVarUint(encoder, MESSAGE_SYNC);
-        syncProtocol.readSyncMessage(decoder, encoder, this.doc, conn);
-        // A reply is only pending if more than the type byte was written.
-        if (encoding.length(encoder) > 1) conn.send(encoding.toUint8Array(encoder));
-        break;
-      }
-      case MESSAGE_AWARENESS: {
-        awarenessProtocol.applyAwarenessUpdate(
-          this.awareness,
-          decoding.readVarUint8Array(decoder),
-          conn,
-        );
-        break;
-      }
-    }
-  }
-
-  leave(conn: WebSocket) {
-    const owned = this.conns.get(conn);
-    this.conns.delete(conn);
-    if (owned && owned.size > 0) {
-      awarenessProtocol.removeAwarenessStates(this.awareness, [...owned], null);
-    }
-  }
-}
-
-const rooms = new Map<string, Room>();
-
-function getRoom(name: string): Room {
-  let room = rooms.get(name);
-  if (!room) {
-    room = new Room(name);
-    rooms.set(name, room);
-  }
-  return room;
-}
+// Persistence is on by default; set DATA_DIR="" to run purely in-memory.
+const dataDir = process.env.DATA_DIR ?? path.resolve(__dirname, "../data");
+const store = dataDir ? new SnapshotStore(dataDir) : null;
+const rooms = new RoomManager(store, MAX_ROOMS);
 
 // ---- HTTP: health check + static client in production ----
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "../dist");
 const hasDist = existsSync(path.join(distDir, "index.html"));
 
@@ -156,6 +44,24 @@ const MIME: Record<string, string> = {
   ".json": "application/json",
   ".woff2": "font/woff2",
 };
+
+// Vite output is content-hashed, so /assets/* can be cached forever;
+// index.html must always revalidate so deploys take effect.
+function cacheControl(filePath: string): string {
+  if (filePath.includes(`${path.sep}assets${path.sep}`)) return "public, max-age=31536000, immutable";
+  if (filePath.endsWith(".html")) return "no-cache";
+  return "public, max-age=3600";
+}
+
+const fileCache = new Map<string, Buffer>();
+function readStatic(filePath: string): Buffer {
+  let data = fileCache.get(filePath);
+  if (!data) {
+    data = readFileSync(filePath);
+    fileCache.set(filePath, data);
+  }
+  return data;
+}
 
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
@@ -176,18 +82,31 @@ const server = http.createServer((req, res) => {
     filePath = path.join(distDir, "index.html");
   }
   const ext = path.extname(filePath);
-  res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
-  res.end(readFileSync(filePath));
+  res.writeHead(200, {
+    "Content-Type": MIME[ext] || "application/octet-stream",
+    "Cache-Control": cacheControl(filePath),
+  });
+  res.end(readStatic(filePath));
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
 
 wss.on("connection", (conn, req) => {
   conn.binaryType = "arraybuffer";
   const roomName = (req.url || "/").slice(1).split("?")[0] || "default";
-  const room = getRoom(roomName);
+  if (!ROOM_NAME_RE.test(roomName)) {
+    conn.close(1008, "invalid room name");
+    return;
+  }
+  const room = rooms.get(roomName);
+  if (!room) {
+    conn.close(1013, "server at capacity");
+    return;
+  }
   room.join(conn);
 
+  // Liveness: any message counts, so a client busy drawing (which can starve
+  // pong delivery) is never mistaken for a dead connection.
   let alive = true;
   conn.on("pong", () => {
     alive = true;
@@ -199,6 +118,7 @@ wss.on("connection", (conn, req) => {
   }, 30_000);
 
   conn.on("message", (data: ArrayBuffer | Buffer) => {
+    alive = true;
     try {
       room.message(conn, new Uint8Array(data as ArrayBuffer));
     } catch (err) {
@@ -209,11 +129,21 @@ wss.on("connection", (conn, req) => {
   conn.on("close", () => {
     clearInterval(pinger);
     room.leave(conn);
+    rooms.onLeave(room);
   });
 });
 
+// Persist everything before going down (deploys, ctrl-c).
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    rooms.flush();
+    process.exit(0);
+  });
+}
+
 server.listen(PORT, HOST, () => {
   console.log(
-    `Driftboard sync server listening on ${HOST}:${PORT}${hasDist ? " (serving dist/)" : ""}`,
+    `Driftboard sync server listening on ${HOST}:${PORT}` +
+      `${hasDist ? " (serving dist/)" : ""}${store ? ` (snapshots in ${dataDir})` : ""}`,
   );
 });

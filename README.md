@@ -8,8 +8,10 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 
 ## Features
 
-- **Infinite canvas**: pan (space-drag, hand tool, trackpad), zoom to cursor (pinch / ⌘-scroll), zoom-to-fit
-- **Sticky notes, text, rectangles, ellipses, arrows, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
+- **Infinite canvas**: pan (space-drag, hand tool, trackpad), zoom to cursor (pinch / ⌘-scroll), zoom-to-fit, two-finger pinch on touch devices
+- **Sticky notes, text, rectangles, ellipses, arrows, images, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
+- **Images**: paste from the clipboard or drop files onto the board — they're downscaled, embedded in the document, and sync like everything else
+- **Arrows that stick to shapes**: draw an arrow from one shape to another and it stays attached while either one moves
 - **Real-time multiplayer**: live cursors with name tags, presence avatars, edits appear as they happen
 - **Cursor chat**: press `/` and talk right at your cursor, Figma-style
 - **Laser pointer**: present with a fading trail everyone sees live
@@ -18,7 +20,7 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 - **Scoped undo/redo**: undo only reverts *your* changes, never a collaborator's
 - **Offline-ready**: boards persist locally in IndexedDB and reconcile on reconnect
 - **Export to PNG**, marquee & multi-select, resize handles, duplicate, recolor, keyboard shortcuts for everything
-- **Dark/light theme**, shareable board URLs, recent-boards list
+- **Dark/light theme**, shareable board URLs, recent boards with live thumbnails
 
 ## How it works
 
@@ -26,9 +28,10 @@ The interesting part is the sync engine. Driftboard is built on **CRDTs** (Confl
 
 - Each board is a `Y.Doc`. Every element (note, shape, stroke) is its own `Y.Map`, so concurrent edits merge **per field**: one person can recolor a note while another moves it, and both edits win.
 - Pen strokes append points to a `Y.Array` while drawing, so collaborators watch strokes appear in real time rather than popping in at the end.
-- The server ([server/index.ts](server/index.ts)) is a WebSocket relay implementing the y-websocket wire protocol directly on top of `yjs` + `y-protocols`: one room per board, document updates fan out to the room, and the awareness protocol carries ephemeral state (cursors, presence) that never touches the document.
+- The server ([server/index.ts](server/index.ts), [server/rooms.ts](server/rooms.ts)) is a WebSocket relay implementing the y-websocket wire protocol directly on top of `yjs` + `y-protocols`: one room per board, document updates fan out to the room, and the awareness protocol carries ephemeral state (cursors, presence) that never touches the document. Rooms are evicted when everyone leaves, and each board is snapshotted to disk ([server/persistence.ts](server/persistence.ts)) so it survives restarts.
 - `Y.UndoManager` is scoped to a local transaction origin, which is what makes undo/redo respect only your own edits.
-- `y-indexeddb` mirrors every board locally, so boards load instantly, work offline, and re-seed the server after a restart; the CRDT guarantees the merge is always clean.
+- `y-indexeddb` mirrors every board locally, so boards load instantly, work offline, and re-seed the server even if its snapshot is gone; the CRDT guarantees the merge is always clean.
+- Arrow attachment stores element *ids*, not coordinates — bound endpoints are resolved from live geometry every render, so they need no sync of their own and can never drift from the shape they point at.
 
 Client: React 19, TypeScript, Vite, Tailwind CSS v4. The canvas is DOM/SVG rendered with a single world transform; no canvas framework, all interaction logic (pan/zoom math, marquee hit-testing, drag/resize state machines) is hand-rolled.
 
@@ -39,7 +42,15 @@ npm install
 npm run dev        # web app on :5173, sync server on :1234
 ```
 
-Open http://localhost:5173, create a board, then open the same board URL in a second window to see live sync.
+Open http://localhost:5173, create a board, then open the same board URL in a second window to see live sync. No configuration needed — in dev the client connects to `ws://localhost:1234` automatically (`VITE_WS_URL` only matters for split deploys, see below).
+
+Tests, typecheck, and lint (also run in CI on every push):
+
+```bash
+npm test           # Vitest: sync protocol, CRDT semantics, geometry, arrow bindings
+npm run typecheck
+npm run lint
+```
 
 ## Production / deploy
 
@@ -54,7 +65,7 @@ npm start          # serves dist/ + WebSocket sync on $PORT
 
 **Split deploy (client on Vercel + sync on Render):** deploy the sync server with the blueprint above, then set `VITE_WS_URL=wss://<your-service>.onrender.com` in the Vercel project's environment variables and redeploy. The included [vercel.json](vercel.json) handles SPA route rewrites. Note the sync server must be a single long-lived process; room state is held in memory, so it can't run on serverless compute without adding external (e.g. Redis) coordination.
 
-> Room state lives in server memory (clients re-seed it from IndexedDB on reconnect). For durable server-side persistence, add a LevelDB/Postgres snapshot layer in `server/index.ts`.
+> Boards are snapshotted to `data/` (override with `DATA_DIR`, or set `DATA_DIR=""` to run purely in memory), so a server restart doesn't lose anything. On hosts with an ephemeral filesystem (e.g. Render's free tier) snapshots survive process restarts but not redeploys — clients still re-seed boards from IndexedDB when they reconnect.
 
 ## Keyboard shortcuts
 
@@ -64,6 +75,7 @@ npm start          # serves dist/ + WebSocket sync on $PORT
 | `N` `T` `R` `O` `A` `P` `L` | Sticky · Text · Rectangle · Ellipse · Arrow · Pen · Laser |
 | `/` | Cursor chat |
 | `⌘Z` / `⇧⌘Z` | Undo / Redo (your changes only) |
+| `⌘V` | Paste an image from the clipboard |
 | `⌘D` | Duplicate selection |
 | `⌫` | Delete selection |
 | `Space`-drag | Pan |

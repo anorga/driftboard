@@ -7,6 +7,7 @@ import {
   useUndoState,
 } from "../lib/board";
 import { deleteElements, duplicateElements, updateElements } from "../lib/elements";
+import { resolveArrows } from "../lib/arrows";
 import { getLocalUser, touchRecentBoard } from "../lib/user";
 import type { Camera, Tool } from "../lib/types";
 import { Canvas } from "../components/Canvas";
@@ -15,7 +16,7 @@ import { TopBar } from "../components/TopBar";
 import { ZoomControls } from "../components/ZoomControls";
 import { SelectionActions } from "../components/SelectionActions";
 import { HelpModal } from "../components/HelpModal";
-import { exportBoardPng } from "../lib/exportPng";
+import { exportBoardPng, renderBoardThumbnail } from "../lib/exportPng";
 import type { AwarenessState } from "../lib/types";
 import { HelpCircle } from "lucide-react";
 
@@ -34,7 +35,9 @@ const TOOL_KEYS: Record<string, Tool> = {
 export function BoardPage() {
   const { roomId = "" } = useParams();
   const conn = useBoardConnection(roomId);
-  const els = useElements(conn.elements);
+  const rawEls = useElements(conn.elements);
+  // Arrows bound to shapes get their endpoints computed from live geometry
+  const els = useMemo(() => resolveArrows(rawEls), [rawEls]);
   const boardName = useMetaField(conn.meta, "name", "");
   const { canUndo, canRedo } = useUndoState(conn.undo);
   const user = useMemo(getLocalUser, []);
@@ -50,6 +53,19 @@ export function BoardPage() {
   useEffect(() => {
     touchRecentBoard(roomId, boardName || "Untitled board");
   }, [roomId, boardName]);
+
+  // Keep the recents thumbnail fresh (debounced so drawing doesn't thrash it)
+  const boardNameRef = useRef(boardName);
+  boardNameRef.current = boardName;
+  useEffect(() => {
+    if (els.length === 0) return;
+    const timer = setTimeout(() => {
+      void renderBoardThumbnail(els).then((thumb) => {
+        if (thumb) touchRecentBoard(roomId, boardNameRef.current || "Untitled board", thumb);
+      });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [els, roomId]);
 
   // Debug handle for dev tooling
   useEffect(() => {
@@ -98,9 +114,22 @@ export function BoardPage() {
 
   const doDelete = useCallback(() => {
     if (selection.size === 0) return;
+    // Surviving arrows bound to a deleted shape keep their current geometry
+    const detach: Array<{ id: string; patch: Partial<(typeof els)[number]> }> = [];
+    for (const el of els) {
+      if (el.type !== "arrow" || selection.has(el.id)) continue;
+      const dropStart = !!el.startRef && selection.has(el.startRef);
+      const dropEnd = !!el.endRef && selection.has(el.endRef);
+      if (!dropStart && !dropEnd) continue;
+      const patch: Partial<(typeof els)[number]> = { x: el.x, y: el.y, w: el.w, h: el.h };
+      if (dropStart) patch.startRef = undefined;
+      if (dropEnd) patch.endRef = undefined;
+      detach.push({ id: el.id, patch });
+    }
+    if (detach.length > 0) updateElements(conn.doc, conn.elements, detach);
     deleteElements(conn.doc, conn.elements, selection);
     setSelection(new Set());
-  }, [conn, selection]);
+  }, [conn, els, selection]);
 
   const doDuplicate = useCallback(() => {
     if (selection.size === 0) return;

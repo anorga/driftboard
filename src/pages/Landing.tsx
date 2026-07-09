@@ -160,10 +160,19 @@ export function Landing() {
                 <div key={b.id} className="group relative">
                   <Link
                     to={`/b/${b.id}`}
-                    className="block rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 transition-all hover:-translate-y-0.5 hover:border-[var(--accent)]"
+                    className="block overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--panel)] transition-all hover:-translate-y-0.5 hover:border-[var(--accent)]"
                   >
-                    <div className="truncate pr-6 font-semibold">{b.name || "Untitled board"}</div>
-                    <div className="mt-1 text-[12px] text-[var(--muted)]">Opened {timeAgo(b.visitedAt)}</div>
+                    {b.thumb && (
+                      <img
+                        src={b.thumb}
+                        alt=""
+                        className="h-28 w-full border-b border-[var(--border)] object-cover"
+                      />
+                    )}
+                    <div className="p-4">
+                      <div className="truncate pr-6 font-semibold">{b.name || "Untitled board"}</div>
+                      <div className="mt-1 text-[12px] text-[var(--muted)]">Opened {timeAgo(b.visitedAt)}</div>
+                    </div>
                   </Link>
                   <button
                     title="Remove from recents"

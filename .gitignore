@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Server-side board snapshots
+data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
