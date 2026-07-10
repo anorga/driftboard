@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anchorPoint, hitTestBindTarget, resolveArrows } from "./arrows";
+import { anchorPoint, detachArrowPatches, hitTestBindTarget, resolveArrows } from "./arrows";
 import type { BoardElement } from "./types";
 
 function el(partial: Partial<BoardElement>): BoardElement {
@@ -60,6 +60,40 @@ describe("resolveArrows", () => {
     const arrow = el({ id: "a", type: "arrow", x: 10, y: 20, w: 30, h: 40, startRef: "missing" });
     const [resolved] = resolveArrows([arrow]);
     expect(resolved).toMatchObject({ x: 10, y: 20, w: 30, h: 40 });
+  });
+});
+
+describe("detachArrowPatches", () => {
+  const shape = el({ id: "s1", x: 0, y: 0, w: 100, h: 100 });
+  const other = el({ id: "s2", x: 300, y: 0, w: 100, h: 100, order: 2 });
+  // In real usage els are resolved, so x/y/w/h already reflect live geometry
+  const arrow = el({ id: "a", type: "arrow", x: 106, y: 50, w: 188, h: 0, order: 3, startRef: "s1", endRef: "s2" });
+  const els = [shape, other, arrow];
+
+  it("move: detaches only refs left behind, freezing resolved geometry", () => {
+    const patches = detachArrowPatches(els, new Set(["a", "s1"]), "move");
+    expect(patches).toEqual([
+      { id: "a", patch: { x: 106, y: 50, w: 188, h: 0, endRef: undefined } },
+    ]);
+  });
+
+  it("move: keeps bindings when the bound shapes move along", () => {
+    expect(detachArrowPatches(els, new Set(["a", "s1", "s2"]), "move")).toEqual([]);
+  });
+
+  it("move: does not touch arrows outside the moving set", () => {
+    expect(detachArrowPatches(els, new Set(["s1"]), "move")).toEqual([]);
+  });
+
+  it("delete: surviving arrows detach from deleted shapes", () => {
+    const patches = detachArrowPatches(els, new Set(["s2"]), "delete");
+    expect(patches).toEqual([
+      { id: "a", patch: { x: 106, y: 50, w: 188, h: 0, endRef: undefined } },
+    ]);
+  });
+
+  it("delete: arrows being deleted themselves are skipped", () => {
+    expect(detachArrowPatches(els, new Set(["a", "s1", "s2"]), "delete")).toEqual([]);
   });
 });
 

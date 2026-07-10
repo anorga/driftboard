@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as Y from "yjs";
@@ -108,12 +108,13 @@ describe("Room protocol relay", () => {
 });
 
 describe("room names", () => {
-  it("accepts nanoid-style ids and rejects path tricks", () => {
+  it("accepts nanoid-style and percent-encoded ids, rejects path tricks", () => {
     expect(ROOM_NAME_RE.test("V1StGXR8_Z")).toBe(true);
-    expect(ROOM_NAME_RE.test("../etc/passwd")).toBe(false);
+    expect(ROOM_NAME_RE.test("team%20plan")).toBe(true);
     expect(ROOM_NAME_RE.test("a/b")).toBe(false);
+    expect(ROOM_NAME_RE.test("a\\b")).toBe(false);
     expect(ROOM_NAME_RE.test("")).toBe(false);
-    expect(ROOM_NAME_RE.test("x".repeat(65))).toBe(false);
+    expect(ROOM_NAME_RE.test("x".repeat(129))).toBe(false);
   });
 });
 
@@ -166,6 +167,22 @@ describe("RoomManager", () => {
     expect(manager.get("b")).not.toBeNull();
     expect(manager.get("c")).toBeNull();
     expect(manager.get("a")).not.toBeNull(); // existing rooms still reachable
+  });
+
+  it("keeps rooms alive forever in pure in-memory mode (no store)", () => {
+    const manager = new RoomManager(null, 10, 1000);
+    const room = manager.get("board1")!;
+    manager.onLeave(room);
+    vi.advanceTimersByTime(60_000);
+    expect(manager.rooms.get("board1")).toBe(room);
+  });
+
+  it("survives a corrupt snapshot instead of crashing", () => {
+    writeFileSync(path.join(dir, "board1.yjs"), Buffer.from("not a yjs update"));
+    const manager = new RoomManager(store, 10, 1000);
+    const room = manager.get("board1");
+    expect(room).not.toBeNull();
+    expect(room!.doc.getMap("elements").size).toBe(0); // starts empty, but alive
   });
 });
 

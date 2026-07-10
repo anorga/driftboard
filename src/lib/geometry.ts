@@ -58,6 +58,19 @@ export function elementBounds(el: BoardElement): Rect {
   return { x: el.x, y: el.y, w: el.w, h: el.h };
 }
 
+/** Bounding box of all elements (arrow-normalized). Callers must handle empty boards. */
+export function boardBounds(els: BoardElement[]): Rect {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const el of els) {
+    const b = elementBounds(el);
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
 /** Camera that fits all elements in the viewport with padding. */
 export function fitCamera(
   els: BoardElement[],
@@ -65,16 +78,12 @@ export function fitCamera(
   fallback: Camera,
 ): Camera {
   if (els.length === 0) return fallback;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const el of els) {
-    minX = Math.min(minX, el.x);
-    minY = Math.min(minY, el.y);
-    maxX = Math.max(maxX, el.x + el.w);
-    maxY = Math.max(maxY, el.y + el.h);
-  }
+  const b = boardBounds(els);
+  const minX = b.x;
+  const minY = b.y;
   const pad = 80;
-  const w = maxX - minX + pad * 2;
-  const h = maxY - minY + pad * 2;
+  const w = b.w + pad * 2;
+  const h = b.h + pad * 2;
   const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min(viewport.width / w, viewport.height / h, 1.5)));
   return {
     x: minX - pad - (viewport.width / z - w) / 2,

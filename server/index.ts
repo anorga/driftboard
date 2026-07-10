@@ -20,8 +20,10 @@ import { SnapshotStore } from "./persistence.ts";
 const PORT = Number(process.env.PORT) || 1234;
 const HOST = process.env.HOST || "0.0.0.0";
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 1000;
-// Generous enough for boards with embedded images, small enough to stop abuse.
-const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+// Must fit a full-document SyncStep2 (a re-seeding client sends the whole
+// board in one message, and image-heavy boards run large) while still
+// bounding what a hostile client can make the server buffer.
+const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,8 +55,12 @@ function cacheControl(filePath: string): string {
   return "public, max-age=3600";
 }
 
+// Only content-hashed files are safe to cache for the process lifetime; an
+// in-place rebuild of dist/ rewrites index.html, which must be read fresh so
+// it never references bundles that no longer exist.
 const fileCache = new Map<string, Buffer>();
 function readStatic(filePath: string): Buffer {
+  if (!filePath.includes(`${path.sep}assets${path.sep}`)) return readFileSync(filePath);
   let data = fileCache.get(filePath);
   if (!data) {
     data = readFileSync(filePath);

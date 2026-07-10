@@ -73,6 +73,39 @@ export function resolveArrows(els: BoardElement[]): BoardElement[] {
   });
 }
 
+/**
+ * Patches that unbind arrows from shapes they're about to be separated from,
+ * freezing each arrow's current resolved geometry first so nothing jumps.
+ *
+ * `els` must be the RESOLVED elements (see resolveArrows). In "move" mode,
+ * `ids` are the elements being moved: arrows in the set detach from bound
+ * shapes that are NOT moving with them. In "delete" mode, `ids` are the
+ * elements being deleted: surviving arrows detach from bound shapes that are
+ * going away.
+ */
+export function detachArrowPatches(
+  els: BoardElement[],
+  ids: ReadonlySet<string>,
+  mode: "move" | "delete",
+): Array<{ id: string; patch: Partial<BoardElement> }> {
+  const patches: Array<{ id: string; patch: Partial<BoardElement> }> = [];
+  for (const el of els) {
+    if (el.type !== "arrow" || (!el.startRef && !el.endRef)) continue;
+    if (mode === "move" ? !ids.has(el.id) : ids.has(el.id)) continue;
+    const dropRef = (ref: string | undefined) =>
+      !!ref && (mode === "move" ? !ids.has(ref) : ids.has(ref));
+    const dropStart = dropRef(el.startRef);
+    const dropEnd = dropRef(el.endRef);
+    if (!dropStart && !dropEnd) continue;
+    // el.x/y/w/h are the resolved endpoints — freeze them before unbinding
+    const patch: Partial<BoardElement> = { x: el.x, y: el.y, w: el.w, h: el.h };
+    if (dropStart) patch.startRef = undefined;
+    if (dropEnd) patch.endRef = undefined;
+    patches.push({ id: el.id, patch });
+  }
+  return patches;
+}
+
 /** Topmost bindable element under `world`, if any. */
 export function hitTestBindTarget(
   els: BoardElement[],

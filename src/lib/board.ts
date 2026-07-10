@@ -14,7 +14,7 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type { AwarenessState, BoardElement } from "./types";
 
@@ -92,9 +92,14 @@ export function useBoardConnection(roomId: string): BoardConnection {
  * appended pen-stroke point would re-serialize the whole board.
  */
 export function useElements(elements: Y.Map<Y.Map<unknown>>): BoardElement[] {
-  const [cache] = useState(() => new WeakMap<Y.Map<unknown>, BoardElement>());
-  const [, setTick] = useState(0);
+  const cacheRef = useRef(new WeakMap<Y.Map<unknown>, BoardElement>());
+  const [tick, setTick] = useState(0);
   useEffect(() => {
+    // Cache validity is tied to this subscription: anything mutated while we
+    // weren't observing (StrictMode remounts, the render-to-effect gap) must
+    // not survive as a stale entry.
+    cacheRef.current = new WeakMap();
+    setTick((t) => t + 1);
     const onChange = (events: Y.YEvent<Y.Map<unknown>>[]) => {
       for (const ev of events) {
         // Walk up to the element-level Y.Map that owns this change (the
@@ -103,24 +108,36 @@ export function useElements(elements: Y.Map<Y.Map<unknown>>): BoardElement[] {
         while (target && target.parent !== elements) {
           target = (target.parent as { parent: unknown } | null) ?? null;
         }
-        if (target) cache.delete(target as unknown as Y.Map<unknown>);
+        if (target) {
+          cacheRef.current.delete(target as unknown as Y.Map<unknown>);
+        } else if ((ev.target as unknown) !== elements) {
+          // Couldn't attribute the change (detached parent chain): drop the
+          // whole cache rather than risk a permanently stale element.
+          cacheRef.current = new WeakMap();
+        }
       }
       setTick((t) => t + 1);
     };
     elements.observeDeep(onChange);
     return () => elements.unobserveDeep(onChange);
-  }, [elements, cache]);
-  const list: BoardElement[] = [];
-  elements.forEach((el) => {
-    let json = cache.get(el);
-    if (!json) {
-      json = el.toJSON() as BoardElement;
-      cache.set(el, json);
-    }
-    list.push(json);
-  });
-  list.sort((a, b) => a.order - b.order);
-  return list;
+  }, [elements]);
+  // Rebuild only when the doc actually changed (tick), not on every render —
+  // stable identity lets consumers (resolveArrows, thumbnail effect) memoize.
+  return useMemo(() => {
+    void tick; // the doc-change counter is this memo's invalidation signal
+    const cache = cacheRef.current;
+    const list: BoardElement[] = [];
+    elements.forEach((el) => {
+      let json = cache.get(el);
+      if (!json) {
+        json = el.toJSON() as BoardElement;
+        cache.set(el, json);
+      }
+      list.push(json);
+    });
+    list.sort((a, b) => a.order - b.order);
+    return list;
+  }, [elements, tick]);
 }
 
 /** Reactive value of a meta field (e.g. the board name). */

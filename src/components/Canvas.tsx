@@ -20,7 +20,7 @@ import {
   updateElements,
 } from "../lib/elements";
 import { fitDimensions, isImageFile, loadImage, IMAGE_DEFAULT_MAX_W } from "../lib/images";
-import { hitTestBindTarget } from "../lib/arrows";
+import { detachArrowPatches, hitTestBindTarget } from "../lib/arrows";
 import { ElementView } from "./ElementView";
 import { CursorsOverlay } from "./CursorsOverlay";
 import { LaserOverlay } from "./LaserOverlay";
@@ -33,7 +33,7 @@ type Drag =
   | { mode: "move"; startWorld: Point; orig: Map<string, { x: number; y: number }>; moved: boolean }
   | { mode: "marquee"; startWorld: Point; additive: boolean; base: Set<string> }
   | { mode: "shape"; id: string; startWorld: Point }
-  | { mode: "arrow"; id: string; startWorld: Point; startRef?: string }
+  | { mode: "arrow"; id: string; startWorld: Point; startRef?: string; snapId?: string | null }
   | { mode: "pen"; id: string; lastWorld: Point }
   | { mode: "resize"; id: string; handle: HandleId; orig: Rect };
 
@@ -70,10 +70,9 @@ export function Canvas({
   const dragRef = useRef<Drag | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [panning, setPanning] = useState(false);
-  // Shape an in-flight arrow would attach to on release (highlighted)
+  // Shape an in-flight arrow would attach to on release (highlight only;
+  // the binding decision reads drag.snapId, which updates synchronously)
   const [snapId, setSnapId] = useState<string | null>(null);
-  const snapIdRef = useRef<string | null>(null);
-  snapIdRef.current = snapId;
   const [spaceDown, setSpaceDown] = useState(false);
   const [chat, setChat] = useState<{ screen: Point; text: string } | null>(null);
   const chatClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -306,6 +305,14 @@ export function Canvas({
           const dx = world.x - drag.startWorld.x;
           const dy = world.y - drag.startWorld.y;
           if (!drag.moved && Math.hypot(dx, dy) * cameraRef.current.z < 3) return;
+          if (!drag.moved) {
+            // The move is real (past the click threshold): arrows being pulled
+            // away from their bound shapes detach now, inside the gesture's
+            // undo group. A plain click never touches bindings.
+            const ids = new Set(drag.orig.keys());
+            const detach = detachArrowPatches(elsRef.current, ids, "move");
+            if (detach.length > 0) updateElements(conn.doc, conn.elements, detach);
+          }
           drag.moved = true;
           const patches: Array<{ id: string; patch: Partial<BoardElement> }> = [];
           drag.orig.forEach((pos, id) => {
@@ -341,7 +348,8 @@ export function Canvas({
           });
           // Hovering a shape? Highlight it as the attach target.
           const target = hitTestBindTarget(elsRef.current, world, drag.startRef);
-          setSnapId(target && target.id !== drag.id ? target.id : null);
+          drag.snapId = target?.id ?? null;
+          setSnapId(drag.snapId);
           break;
         }
         case "pen": {
@@ -394,7 +402,7 @@ export function Canvas({
       setTool("select");
     }
     if (drag.mode === "arrow") {
-      const snap = snapIdRef.current;
+      const snap = drag.snapId;
       setSnapId(null);
       if (snap) {
         updateElement(conn.doc, conn.elements, drag.id, { endRef: snap });
@@ -413,10 +421,15 @@ export function Canvas({
     conn.undo.stopCapturing();
   }, [conn, onWindowMove, setSelection, setTool]);
 
+  const dragPointerTypeRef = useRef<string>("mouse");
   const beginDrag = useCallback(
-    (drag: Drag) => {
+    (drag: Drag, pointerType = "mouse") => {
+      // Never start a gesture under an active two-finger pinch, whichever
+      // handler the second finger happened to land on.
+      if (touchesRef.current.size >= 2) return;
       conn.undo.stopCapturing();
       dragRef.current = drag;
+      dragPointerTypeRef.current = pointerType;
       window.addEventListener("pointermove", onWindowMove);
       window.addEventListener("pointerup", onWindowUp, { once: true });
     },
@@ -431,6 +444,9 @@ export function Canvas({
     if (!vp) return;
     const onDown = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
+      // Palm rejection: while a stylus or mouse gesture is in flight, stray
+      // touches must neither cancel it nor start a pinch.
+      if (dragRef.current && dragPointerTypeRef.current !== "touch") return;
       if (touchesRef.current.size >= 2) return; // ignore third+ fingers
       touchesRef.current.set(e.pointerId, toScreen(e));
       if (touchesRef.current.size !== 2) return;
@@ -465,7 +481,7 @@ export function Canvas({
       // Middle mouse, space, or hand tool pans
       if (e.button === 1 || spaceDown || t === "hand") {
         setPanning(true);
-        beginDrag({ mode: "pan", startCam: cameraRef.current, startScreen: screen });
+        beginDrag({ mode: "pan", startCam: cameraRef.current, startScreen: screen }, e.pointerType);
         return;
       }
       if (e.button !== 0) return;
@@ -473,7 +489,7 @@ export function Canvas({
       if (t === "select") {
         const additive = e.shiftKey;
         if (!additive) setSelection(new Set());
-        beginDrag({ mode: "marquee", startWorld: world, additive, base: new Set(selectionRef.current) });
+        beginDrag({ mode: "marquee", startWorld: world, additive, base: new Set(selectionRef.current) }, e.pointerType);
         return;
       }
       if (t === "sticky") {
@@ -515,7 +531,7 @@ export function Canvas({
           h: 2,
           color: drawColorRef.current,
         });
-        beginDrag({ mode: "shape", id, startWorld: world });
+        beginDrag({ mode: "shape", id, startWorld: world }, e.pointerType);
         return;
       }
       if (t === "arrow") {
@@ -530,7 +546,7 @@ export function Canvas({
           color: drawColorRef.current,
           startRef: startTarget?.id,
         });
-        beginDrag({ mode: "arrow", id, startWorld: world, startRef: startTarget?.id });
+        beginDrag({ mode: "arrow", id, startWorld: world, startRef: startTarget?.id }, e.pointerType);
         return;
       }
       if (t === "laser") return; // laser never creates elements
@@ -546,7 +562,7 @@ export function Canvas({
           size: 6,
           points: [world.x, world.y, pressure],
         });
-        beginDrag({ mode: "pen", id, lastWorld: world });
+        beginDrag({ mode: "pen", id, lastWorld: world }, e.pointerType);
         return;
       }
     },
@@ -573,30 +589,14 @@ export function Canvas({
       next = selectionRef.current.has(id) ? new Set(selectionRef.current) : new Set([id]);
       setSelection(next);
 
-      // Grabbing a bound arrow pulls it off its shapes — unless the shapes
-      // are moving with it, in which case the binding survives the move.
-      const detachPatches: Array<{ id: string; patch: Partial<BoardElement> }> = [];
-      for (const el of elsRef.current) {
-        if (!next.has(el.id) || el.type !== "arrow" || (!el.startRef && !el.endRef)) continue;
-        const detachStart = !!el.startRef && !next.has(el.startRef);
-        const detachEnd = !!el.endRef && !next.has(el.endRef);
-        if (!detachStart && !detachEnd) continue;
-        // el.x/y/w/h are the resolved endpoints — freeze them before unbinding
-        const patch: Partial<BoardElement> = { x: el.x, y: el.y, w: el.w, h: el.h };
-        if (detachStart) patch.startRef = undefined;
-        if (detachEnd) patch.endRef = undefined;
-        detachPatches.push({ id: el.id, patch });
-      }
-      if (detachPatches.length > 0) updateElements(conn.doc, conn.elements, detachPatches);
-
       const orig = new Map<string, { x: number; y: number }>();
       for (const el of elsRef.current) {
         if (next.has(el.id)) orig.set(el.id, { x: el.x, y: el.y });
       }
       const world = screenToWorld(toScreen(e), cameraRef.current);
-      beginDrag({ mode: "move", startWorld: world, orig, moved: false });
+      beginDrag({ mode: "move", startWorld: world, orig, moved: false }, e.pointerType);
     },
-    [beginDrag, conn, editingId, setEditingId, setSelection, toScreen],
+    [beginDrag, editingId, setEditingId, setSelection, toScreen],
   );
 
   const onElementDoubleClick = useCallback(
@@ -640,7 +640,7 @@ export function Canvas({
       e.stopPropagation();
       const el = elsRef.current.find((x) => x.id === id);
       if (!el) return;
-      beginDrag({ mode: "resize", id, handle, orig: elementBounds(el) });
+      beginDrag({ mode: "resize", id, handle, orig: elementBounds(el) }, e.pointerType);
     },
     [beginDrag],
   );
@@ -712,9 +712,11 @@ export function Canvas({
       onDoubleClick={onCanvasDoubleClick}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
+        // Always consume the drop — the default action would navigate the
+        // browser to the dropped file, dumping the user out of the board.
+        e.preventDefault();
         const files = [...e.dataTransfer.files].filter(isImageFile);
         if (files.length === 0) return;
-        e.preventDefault();
         void insertImages(files, toScreen(e));
       }}
       onPointerMove={(e) => {
