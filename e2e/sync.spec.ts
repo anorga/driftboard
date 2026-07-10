@@ -46,7 +46,7 @@ test("edits, presence, and deletes sync between two clients", async ({ browser }
 
   // B deletes everything; A's board empties (scoped to elements, not undo)
   await b.keyboard.press("Escape");
-  await b.keyboard.press("Meta+a");
+  await b.keyboard.press("ControlOrMeta+a");
   await b.keyboard.press("Backspace");
   await expect(a.locator("[data-element-id]")).toHaveCount(0);
 

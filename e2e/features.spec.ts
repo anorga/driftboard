@@ -61,9 +61,9 @@ test("copy/paste duplicates elements at the cursor", async ({ page, context }) =
   await expect(page.locator("[data-element-id]")).toHaveCount(1);
 
   await page.mouse.click(450, 340); // select
-  await page.keyboard.press("Meta+c");
+  await page.keyboard.press("ControlOrMeta+c");
   await page.mouse.move(900, 600); // paste lands at the cursor
-  await page.keyboard.press("Meta+v");
+  await page.keyboard.press("ControlOrMeta+v");
 
   await expect(page.locator("[data-element-id]")).toHaveCount(2);
 });
