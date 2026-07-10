@@ -136,6 +136,78 @@ export function duplicateElements(
   return newIds;
 }
 
+/**
+ * Insert copied elements (e.g. from the clipboard) so their combined center
+ * lands at `at`. Ids are regenerated; arrow bindings are remapped when the
+ * bound shape was copied too and stripped otherwise (the copied geometry is
+ * already the resolved fallback).
+ */
+export function pasteElements(
+  doc: Y.Doc,
+  elements: Y.Map<Y.Map<unknown>>,
+  copied: BoardElement[],
+  at: { x: number; y: number },
+): string[] {
+  if (copied.length === 0) return [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const el of copied) {
+    minX = Math.min(minX, el.x);
+    minY = Math.min(minY, el.y);
+    maxX = Math.max(maxX, el.x + el.w);
+    maxY = Math.max(maxY, el.y + el.h);
+  }
+  const dx = at.x - (minX + maxX) / 2;
+  const dy = at.y - (minY + maxY) / 2;
+  const idMap = new Map(copied.map((el) => [el.id, nanoid(10)]));
+  doc.transact(() => {
+    for (const el of copied) {
+      const newId = idMap.get(el.id)!;
+      elements.set(
+        newId,
+        writeElement({
+          ...el,
+          id: newId,
+          x: el.x + dx,
+          y: el.y + dy,
+          order: nextOrder(elements),
+          startRef: el.startRef ? idMap.get(el.startRef) : undefined,
+          endRef: el.endRef ? idMap.get(el.endRef) : undefined,
+        }),
+      );
+    }
+  }, LOCAL_ORIGIN);
+  return [...idMap.values()];
+}
+
+/** Raise the given elements above everything else, preserving their relative order. */
+export function bringToFront(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: Iterable<string>) {
+  doc.transact(() => {
+    const sorted = [...ids]
+      .map((id) => elements.get(id))
+      .filter((el): el is Y.Map<unknown> => !!el)
+      .sort((a, b) => (((a.get("order") as number) ?? 0) - ((b.get("order") as number) ?? 0)));
+    for (const el of sorted) el.set("order", nextOrder(elements));
+  }, LOCAL_ORIGIN);
+}
+
+/** Lower the given elements below everything else, preserving their relative order. */
+export function sendToBack(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: Iterable<string>) {
+  doc.transact(() => {
+    let min = Infinity;
+    elements.forEach((el) => {
+      const o = (el.get("order") as number) ?? 0;
+      if (o < min) min = o;
+    });
+    const sorted = [...ids]
+      .map((id) => elements.get(id))
+      .filter((el): el is Y.Map<unknown> => !!el)
+      .sort((a, b) => (((a.get("order") as number) ?? 0) - ((b.get("order") as number) ?? 0)));
+    if (!Number.isFinite(min) || sorted.length === 0) return;
+    let order = min - sorted.length;
+    for (const el of sorted) el.set("order", order++);
+  }, LOCAL_ORIGIN);
+}
+
 /** Append points to a stroke while drawing, so peers watch it appear live. */
 export function appendStrokePoints(
   doc: Y.Doc,

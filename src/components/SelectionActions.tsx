@@ -1,4 +1,4 @@
-import { Copy, Trash2 } from "lucide-react";
+import { BringToFront, Copy, SendToBack, Trash2 } from "lucide-react";
 import { PALETTE } from "../lib/constants";
 
 interface Props {
@@ -6,10 +6,12 @@ interface Props {
   onColor: (colorId: string) => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onFront: () => void;
+  onBack: () => void;
 }
 
 /** Floating action bar shown while elements are selected. */
-export function SelectionActions({ count, onColor, onDuplicate, onDelete }: Props) {
+export function SelectionActions({ count, onColor, onDuplicate, onDelete, onFront, onBack }: Props) {
   if (count === 0) return null;
   return (
     <div className="pointer-events-auto absolute left-1/2 top-20 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] py-2 pl-4 pr-2 shadow-lg backdrop-blur-md">
@@ -29,6 +31,20 @@ export function SelectionActions({ count, onColor, onDuplicate, onDelete }: Prop
         ))}
       </div>
       <div className="mx-1 h-5 w-px bg-[var(--border)]" />
+      <button
+        title="Bring to front (])"
+        onClick={onFront}
+        className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text)] hover:bg-[var(--hover)]"
+      >
+        <BringToFront size={15} />
+      </button>
+      <button
+        title="Send to back ([)"
+        onClick={onBack}
+        className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--text)] hover:bg-[var(--hover)]"
+      >
+        <SendToBack size={15} />
+      </button>
       <button
         title="Duplicate (⌘D)"
         onClick={onDuplicate}

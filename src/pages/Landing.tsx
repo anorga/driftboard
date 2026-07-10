@@ -7,12 +7,13 @@ import {
   MessageCircle,
   Moon,
   Sun,
+  Trash2,
   Undo2,
   Wand2,
   X,
 } from "lucide-react";
 import { GithubIcon } from "../components/Logo";
-import { getRecentBoards, removeRecentBoard, touchRecentBoard } from "../lib/user";
+import { deleteLocalBoard, getRecentBoards, removeRecentBoard, touchRecentBoard } from "../lib/user";
 import { useTheme } from "../lib/theme";
 import { Logo } from "../components/Logo";
 import { HeroDemo } from "../components/HeroDemo";
@@ -174,13 +175,26 @@ export function Landing() {
                       <div className="mt-1 text-[12px] text-[var(--muted)]">Opened {timeAgo(b.visitedAt)}</div>
                     </div>
                   </Link>
-                  <button
-                    title="Remove from recents"
-                    onClick={() => forget(b.id)}
-                    className="absolute right-3 top-3 hidden h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)] group-hover:flex"
-                  >
-                    <X size={13} />
-                  </button>
+                  <div className="absolute right-2 top-2 hidden items-center gap-0.5 rounded-lg bg-[var(--panel-solid,var(--panel))] p-0.5 shadow group-hover:flex">
+                    <button
+                      title="Remove from recents"
+                      onClick={() => forget(b.id)}
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+                    >
+                      <X size={13} />
+                    </button>
+                    <button
+                      title="Delete local copy"
+                      onClick={() => {
+                        if (!window.confirm("Delete this board's copy from this device? The shared board stays available at its link.")) return;
+                        deleteLocalBoard(b.id);
+                        setRecent(getRecentBoards());
+                      }}
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted)] hover:bg-red-500/10 hover:text-red-500"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

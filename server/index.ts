@@ -71,8 +71,8 @@ function readStatic(filePath: string): Buffer {
 
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("ok");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, connections: wss.clients.size }));
     return;
   }
   if (!hasDist) {
@@ -95,10 +95,28 @@ const server = http.createServer((req, res) => {
   res.end(readStatic(filePath));
 });
 
-const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
+// Optional browser-origin allowlist (comma-separated). Unset = allow all,
+// which split client/server deploys need. Non-browser clients (no Origin
+// header) always pass — this is CSRF-style protection, not auth.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const wss = new WebSocketServer({
+  server,
+  maxPayload: MAX_MESSAGE_BYTES,
+  // Sync payloads (especially image-heavy SyncStep2) compress well
+  perMessageDeflate: { threshold: 1024 },
+});
 
 wss.on("connection", (conn, req) => {
   conn.binaryType = "arraybuffer";
+  const origin = req.headers.origin;
+  if (allowedOrigins.length > 0 && origin && !allowedOrigins.includes(origin)) {
+    conn.close(1008, "origin not allowed");
+    return;
+  }
   const roomName = (req.url || "/").slice(1).split("?")[0] || "default";
   if (!ROOM_NAME_RE.test(roomName)) {
     conn.close(1008, "invalid room name");

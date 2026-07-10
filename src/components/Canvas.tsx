@@ -16,9 +16,11 @@ import {
   appendStrokePoints,
   deleteElements,
   normalizeStroke,
+  pasteElements,
   updateElement,
   updateElements,
 } from "../lib/elements";
+import { parseClipboardElements } from "../lib/clipboard";
 import { fitDimensions, isImageFile, loadImage, IMAGE_DEFAULT_MAX_W } from "../lib/images";
 import { detachArrowPatches, hitTestBindTarget } from "../lib/arrows";
 import { ElementView } from "./ElementView";
@@ -34,6 +36,15 @@ type Drag =
   | { mode: "marquee"; startWorld: Point; additive: boolean; base: Set<string> }
   | { mode: "shape"; id: string; startWorld: Point }
   | { mode: "arrow"; id: string; startWorld: Point; startRef?: string; snapId?: string | null }
+  | {
+      mode: "arrow-end";
+      id: string;
+      which: "start" | "end";
+      baseStart: Point;
+      baseEnd: Point;
+      otherRef?: string;
+      snapId?: string | null;
+    }
   | { mode: "pen"; id: string; lastWorld: Point }
   | { mode: "resize"; id: string; handle: HandleId; orig: Rect };
 
@@ -200,13 +211,25 @@ export function Canvas({
       const t = e.target as HTMLElement;
       if (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable) return;
       const files = [...(e.clipboardData?.files ?? [])].filter(isImageFile);
-      if (files.length === 0) return;
-      e.preventDefault();
-      void insertImages(files, lastScreen.current);
+      if (files.length > 0) {
+        e.preventDefault();
+        void insertImages(files, lastScreen.current);
+        return;
+      }
+      // Copied board elements travel as marked JSON text (works across boards)
+      const copied = parseClipboardElements(e.clipboardData?.getData("text/plain") ?? "");
+      if (copied && copied.length > 0) {
+        e.preventDefault();
+        const world = screenToWorld(lastScreen.current, cameraRef.current);
+        const ids = pasteElements(conn.doc, conn.elements, copied, world);
+        setSelection(new Set(ids));
+        setTool("select");
+        conn.undo.stopCapturing();
+      }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [insertImages]);
+  }, [conn, insertImages, setSelection, setTool]);
 
   // ---- Space-to-pan ----
   useEffect(() => {
@@ -352,6 +375,26 @@ export function Canvas({
           setSnapId(drag.snapId);
           break;
         }
+        case "arrow-end": {
+          if (drag.which === "end") {
+            updateElement(conn.doc, conn.elements, drag.id, {
+              w: world.x - drag.baseStart.x,
+              h: world.y - drag.baseStart.y,
+            });
+          } else {
+            updateElement(conn.doc, conn.elements, drag.id, {
+              x: world.x,
+              y: world.y,
+              w: drag.baseEnd.x - world.x,
+              h: drag.baseEnd.y - world.y,
+            });
+          }
+          // Both endpoints on one shape would degenerate — exclude the other ref
+          const target = hitTestBindTarget(elsRef.current, world, drag.otherRef);
+          drag.snapId = target && target.id !== drag.id ? target.id : null;
+          setSnapId(drag.snapId);
+          break;
+        }
         case "pen": {
           if (Math.hypot(world.x - drag.lastWorld.x, world.y - drag.lastWorld.y) < 0.75 / cameraRef.current.z) return;
           drag.lastWorld = world;
@@ -416,6 +459,17 @@ export function Canvas({
       }
       setSelection(new Set([drag.id]));
       setTool("select");
+    }
+    if (drag.mode === "arrow-end") {
+      setSnapId(null);
+      if (drag.snapId) {
+        updateElement(
+          conn.doc,
+          conn.elements,
+          drag.id,
+          drag.which === "start" ? { startRef: drag.snapId } : { endRef: drag.snapId },
+        );
+      }
     }
     // Each gesture is one undo step
     conn.undo.stopCapturing();
@@ -493,6 +547,9 @@ export function Canvas({
         return;
       }
       if (t === "sticky") {
+        // Cancel the pointerdown so the trailing mousedown's focus-steal
+        // can't blur the editor textarea the moment it mounts
+        e.preventDefault();
         const id = addElement(conn.doc, conn.elements, {
           type: "sticky",
           x: world.x - STICKY_DEFAULT / 2,
@@ -508,6 +565,7 @@ export function Canvas({
         return;
       }
       if (t === "text") {
+        e.preventDefault(); // same focus-steal guard as sticky
         const id = addElement(conn.doc, conn.elements, {
           type: "text",
           x: world.x,
@@ -634,6 +692,34 @@ export function Canvas({
     [conn, setEditingId, setSelection, toScreen],
   );
 
+  // Grab an endpoint of a selected arrow: unbind it (freezing the arrow's
+  // resolved geometry first so nothing jumps), drag it, rebind on release.
+  const onArrowEndDown = useCallback(
+    (e: React.PointerEvent, id: string, which: "start" | "end") => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      const el = elsRef.current.find((x) => x.id === id);
+      if (!el || el.type !== "arrow") return;
+      beginDrag(
+        {
+          mode: "arrow-end",
+          id,
+          which,
+          baseStart: { x: el.x, y: el.y },
+          baseEnd: { x: el.x + el.w, y: el.y + el.h },
+          otherRef: which === "start" ? el.endRef : el.startRef,
+        },
+        e.pointerType,
+      );
+      if (dragRef.current?.mode !== "arrow-end") return; // pinch guard declined
+      const patch: Partial<BoardElement> = { x: el.x, y: el.y, w: el.w, h: el.h };
+      if (which === "start") patch.startRef = undefined;
+      else patch.endRef = undefined;
+      updateElement(conn.doc, conn.elements, id, patch);
+    },
+    [beginDrag, conn],
+  );
+
   const onResizeHandleDown = useCallback(
     (e: React.PointerEvent, id: string, handle: HandleId) => {
       if (e.button !== 0) return;
@@ -677,6 +763,13 @@ export function Canvas({
     return el && el.type !== "stroke" && el.type !== "arrow" ? el : null;
   }, [els, selection]);
 
+  // Endpoint handles for a single selected arrow
+  const singleArrow = useMemo(() => {
+    if (selection.size !== 1) return null;
+    const el = els.find((x) => selection.has(x.id));
+    return el?.type === "arrow" ? el : null;
+  }, [els, selection]);
+
   // Remote selections: outline what collaborators have selected, in their color
   const remoteSelections = useMemo(() => {
     const byId = new Map(els.map((e) => [e.id, e]));
@@ -706,6 +799,7 @@ export function Canvas({
   return (
     <div
       ref={viewportRef}
+      data-canvas
       className="absolute inset-0 overflow-hidden bg-[var(--canvas)]"
       style={viewportStyle}
       onPointerDown={onCanvasPointerDown}
@@ -761,6 +855,31 @@ export function Canvas({
             onPointerDown={(e) => onResizeHandleDown(e, single!.id, h.id)}
           />
         ))}
+
+        {singleArrow &&
+          (["start", "end"] as const).map((which) => {
+            const px = which === "start" ? singleArrow.x : singleArrow.x + singleArrow.w;
+            const py = which === "start" ? singleArrow.y : singleArrow.y + singleArrow.h;
+            const size = 12 / camera.z;
+            return (
+              <div
+                key={which}
+                title="Drag to reconnect"
+                className="absolute rounded-full bg-white"
+                style={{
+                  left: 0,
+                  top: 0,
+                  width: size,
+                  height: size,
+                  transform: `translate(${px - size / 2}px, ${py - size / 2}px)`,
+                  border: `${2 / camera.z}px solid var(--accent)`,
+                  cursor: "crosshair",
+                  pointerEvents: interactive ? "auto" : "none",
+                }}
+                onPointerDown={(e) => onArrowEndDown(e, singleArrow.id, which)}
+              />
+            );
+          })}
 
         {snapId &&
           (() => {

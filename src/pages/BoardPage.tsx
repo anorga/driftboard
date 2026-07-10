@@ -6,7 +6,14 @@ import {
   useMetaField,
   useUndoState,
 } from "../lib/board";
-import { deleteElements, duplicateElements, updateElements } from "../lib/elements";
+import {
+  bringToFront,
+  deleteElements,
+  duplicateElements,
+  sendToBack,
+  updateElements,
+} from "../lib/elements";
+import { CLIPBOARD_MARKER } from "../lib/clipboard";
 import { detachArrowPatches, resolveArrows } from "../lib/arrows";
 import { getLocalUser, touchRecentBoard } from "../lib/user";
 import type { Camera, Tool } from "../lib/types";
@@ -77,18 +84,61 @@ export function BoardPage() {
     conn.awareness.setLocalStateField("selection", [...selection]);
   }, [conn, selection]);
 
-  const jumpTo = useCallback(
-    (clientId: number) => {
-      const state = conn.awareness.getStates().get(clientId) as AwarenessState | undefined;
-      const target = state?.cursor ?? state?.laser;
-      if (!target) return;
-      setCamera((cam) => ({
-        x: target.x - window.innerWidth / 2 / cam.z,
-        y: target.y - window.innerHeight / 2 / cam.z,
-        z: cam.z,
-      }));
-    },
-    [conn],
+  // ---- Follow mode ----
+  // Broadcast our camera (throttled) so collaborators can follow us
+  const viewThrottle = useRef({ last: 0, timer: null as ReturnType<typeof setTimeout> | null });
+  useEffect(() => {
+    const send = () => {
+      viewThrottle.current.last = performance.now();
+      conn.awareness.setLocalStateField("view", camera);
+    };
+    const elapsed = performance.now() - viewThrottle.current.last;
+    if (elapsed >= 80) {
+      send();
+    } else {
+      if (viewThrottle.current.timer) clearTimeout(viewThrottle.current.timer);
+      viewThrottle.current.timer = setTimeout(send, 80 - elapsed);
+    }
+  }, [conn, camera]);
+
+  const [followingId, setFollowingId] = useState<number | null>(null);
+
+  // While following, mirror the followed user's camera as it streams in
+  useEffect(() => {
+    if (followingId == null) return;
+    const apply = () => {
+      const state = conn.awareness.getStates().get(followingId) as AwarenessState | undefined;
+      if (!state?.user) {
+        setFollowingId(null); // they left
+        return;
+      }
+      if (state.view) setCamera({ ...state.view });
+    };
+    apply();
+    conn.awareness.on("change", apply);
+    return () => conn.awareness.off("change", apply);
+  }, [conn, followingId]);
+
+  // Taking control back (any interaction outside the presence UI) stops following
+  useEffect(() => {
+    if (followingId == null) return;
+    const stop = (e: Event) => {
+      if ((e.target as HTMLElement | null)?.closest?.("[data-follow-ui]")) return;
+      setFollowingId(null);
+    };
+    window.addEventListener("pointerdown", stop, { capture: true });
+    window.addEventListener("wheel", stop, { capture: true, passive: true });
+    window.addEventListener("keydown", stop, { capture: true });
+    return () => {
+      window.removeEventListener("pointerdown", stop, { capture: true });
+      window.removeEventListener("wheel", stop, { capture: true });
+      window.removeEventListener("keydown", stop, { capture: true });
+    };
+  }, [followingId]);
+
+  const toggleFollow = useCallback(
+    (clientId: number) => setFollowingId((cur) => (cur === clientId ? null : clientId)),
+    [],
   );
 
   const doExport = useCallback(
@@ -125,6 +175,29 @@ export function BoardPage() {
     setSelection(new Set(ids));
   }, [conn, selection]);
 
+  // Copy resolved elements so bound arrows carry usable fallback geometry
+  const doCopy = useCallback(() => {
+    if (selection.size === 0) return;
+    const copied = els.filter((el) => selection.has(el.id));
+    void navigator.clipboard
+      .writeText(JSON.stringify({ [CLIPBOARD_MARKER]: 1, elements: copied }))
+      .catch(() => {
+        // clipboard unavailable (permissions/http) — nothing to do
+      });
+  }, [els, selection]);
+
+  const doCut = useCallback(() => {
+    doCopy();
+    doDelete();
+  }, [doCopy, doDelete]);
+
+  const doFront = useCallback(() => {
+    if (selection.size > 0) bringToFront(conn.doc, conn.elements, selection);
+  }, [conn, selection]);
+  const doBack = useCallback(() => {
+    if (selection.size > 0) sendToBack(conn.doc, conn.elements, selection);
+  }, [conn, selection]);
+
   const doColor = useCallback(
     (colorId: string) => {
       updateElements(
@@ -138,8 +211,8 @@ export function BoardPage() {
   );
 
   // ---- Keyboard shortcuts ----
-  const stateRef = useRef({ doDelete, doDuplicate, editingId, selection });
-  stateRef.current = { doDelete, doDuplicate, editingId, selection };
+  const stateRef = useRef({ doDelete, doDuplicate, doCopy, doCut, doFront, doBack, editingId, selection, els });
+  stateRef.current = { doDelete, doDuplicate, doCopy, doCut, doFront, doBack, editingId, selection, els };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -161,11 +234,60 @@ export function BoardPage() {
         stateRef.current.doDuplicate();
         return;
       }
+      if (mod && e.key.toLowerCase() === "c") {
+        if (typing) return;
+        stateRef.current.doCopy();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "x") {
+        if (typing) return;
+        stateRef.current.doCut();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "a") {
+        if (typing) return;
+        e.preventDefault();
+        setSelection(new Set(stateRef.current.els.map((el) => el.id)));
+        return;
+      }
       if (typing || mod) return;
 
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         stateRef.current.doDelete();
+        return;
+      }
+      const nudge: Record<string, [number, number]> = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+      };
+      if (nudge[e.key] && stateRef.current.selection.size > 0) {
+        e.preventDefault();
+        const { selection: sel, els: current } = stateRef.current;
+        const [dx, dy] = nudge[e.key];
+        const step = e.shiftKey ? 10 : 1;
+        // Same semantics as a drag: arrows nudged away from their shapes detach
+        const detach = detachArrowPatches(current, sel, "move");
+        if (detach.length > 0) updateElements(conn.doc, conn.elements, detach);
+        const byId = new Map(current.map((el) => [el.id, el]));
+        updateElements(
+          conn.doc,
+          conn.elements,
+          [...sel].flatMap((id) => {
+            const el = byId.get(id);
+            return el ? [{ id, patch: { x: el.x + dx * step, y: el.y + dy * step } }] : [];
+          }),
+        );
+        return;
+      }
+      if (e.key === "]") {
+        stateRef.current.doFront();
+        return;
+      }
+      if (e.key === "[") {
+        stateRef.current.doBack();
         return;
       }
       if (e.key === "?") {
@@ -218,13 +340,16 @@ export function BoardPage() {
         user={user}
         onBoardNameChange={(name) => touchRecentBoard(roomId, name || "Untitled board")}
         onExport={doExport}
-        onJumpTo={jumpTo}
+        followingId={followingId}
+        onToggleFollow={toggleFollow}
       />
       <SelectionActions
         count={selection.size}
         onColor={doColor}
         onDuplicate={doDuplicate}
         onDelete={doDelete}
+        onFront={doFront}
+        onBack={doBack}
       />
       <Toolbar
         tool={tool}
