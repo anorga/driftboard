@@ -32,29 +32,36 @@ export interface NewElement {
   endRef?: string;
 }
 
+/**
+ * Serialize an element into a fresh Y.Map. The single source of truth for
+ * which fields an element carries — addElement and duplicateElements both
+ * write through here, so a new field can never silently drop on duplicate.
+ */
+function writeElement(fields: NewElement & { id: string; order: number }): Y.Map<unknown> {
+  const ymap = new Y.Map<unknown>();
+  ymap.set("id", fields.id);
+  ymap.set("type", fields.type);
+  ymap.set("x", fields.x);
+  ymap.set("y", fields.y);
+  ymap.set("w", fields.w);
+  ymap.set("h", fields.h);
+  ymap.set("color", fields.color);
+  ymap.set("order", fields.order);
+  for (const key of ["text", "size", "src", "startRef", "endRef"] as const) {
+    if (fields[key] !== undefined) ymap.set(key, fields[key]);
+  }
+  if (fields.points !== undefined) {
+    const arr = new Y.Array<number>();
+    arr.push([...fields.points]);
+    ymap.set("points", arr);
+  }
+  return ymap;
+}
+
 export function addElement(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, el: NewElement): string {
   const id = nanoid(10);
   doc.transact(() => {
-    const ymap = new Y.Map<unknown>();
-    ymap.set("id", id);
-    ymap.set("type", el.type);
-    ymap.set("x", el.x);
-    ymap.set("y", el.y);
-    ymap.set("w", el.w);
-    ymap.set("h", el.h);
-    ymap.set("color", el.color);
-    ymap.set("order", nextOrder(elements));
-    if (el.text !== undefined) ymap.set("text", el.text);
-    if (el.size !== undefined) ymap.set("size", el.size);
-    if (el.src !== undefined) ymap.set("src", el.src);
-    if (el.startRef !== undefined) ymap.set("startRef", el.startRef);
-    if (el.endRef !== undefined) ymap.set("endRef", el.endRef);
-    if (el.points !== undefined) {
-      const arr = new Y.Array<number>();
-      arr.push(el.points);
-      ymap.set("points", arr);
-    }
-    elements.set(id, ymap);
+    elements.set(id, writeElement({ ...el, id, order: nextOrder(elements) }));
   }, LOCAL_ORIGIN);
   return id;
 }
@@ -65,17 +72,14 @@ export function updateElement(
   id: string,
   patch: Partial<BoardElement>,
 ) {
-  const el = elements.get(id);
-  if (!el) return;
-  doc.transact(() => {
-    for (const [k, v] of Object.entries(patch)) {
-      if (k === "points") continue; // points are append-only via appendStrokePoints
-      if (v === undefined) el.delete(k);
-      else el.set(k, v);
-    }
-  }, LOCAL_ORIGIN);
+  updateElements(doc, elements, [{ id, patch }]);
 }
 
+/**
+ * Apply field patches. A key explicitly set to `undefined` is DELETED from
+ * the element (used to clear arrow bindings) — don't spread optional fields
+ * into a patch unless that's what you mean.
+ */
 export function updateElements(
   doc: Y.Doc,
   elements: Y.Map<Y.Map<unknown>>,
@@ -86,7 +90,7 @@ export function updateElements(
       const el = elements.get(id);
       if (!el) continue;
       for (const [k, v] of Object.entries(patch)) {
-        if (k === "points") continue;
+        if (k === "points") continue; // points are append-only via appendStrokePoints
         if (v === undefined) el.delete(k);
         else el.set(k, v);
       }
@@ -116,30 +120,92 @@ export function duplicateElements(
       const src = elements.get(id);
       if (!src) continue;
       const json = src.toJSON() as BoardElement;
-      const ymap = new Y.Map<unknown>();
-      ymap.set("id", newId);
-      ymap.set("type", json.type);
-      ymap.set("x", json.x + 24);
-      ymap.set("y", json.y + 24);
-      ymap.set("w", json.w);
-      ymap.set("h", json.h);
-      ymap.set("color", json.color);
-      ymap.set("order", nextOrder(elements));
-      if (json.text !== undefined) ymap.set("text", json.text);
-      if (json.size !== undefined) ymap.set("size", json.size);
-      if (json.src !== undefined) ymap.set("src", json.src);
-      if (json.startRef !== undefined) ymap.set("startRef", idMap.get(json.startRef) ?? json.startRef);
-      if (json.endRef !== undefined) ymap.set("endRef", idMap.get(json.endRef) ?? json.endRef);
-      if (json.points !== undefined) {
-        const arr = new Y.Array<number>();
-        arr.push([...json.points]);
-        ymap.set("points", arr);
-      }
-      elements.set(newId, ymap);
+      const copy = writeElement({
+        ...json,
+        id: newId,
+        x: json.x + 24,
+        y: json.y + 24,
+        order: nextOrder(elements),
+        startRef: json.startRef && (idMap.get(json.startRef) ?? json.startRef),
+        endRef: json.endRef && (idMap.get(json.endRef) ?? json.endRef),
+      });
+      elements.set(newId, copy);
       newIds.push(newId);
     }
   }, LOCAL_ORIGIN);
   return newIds;
+}
+
+/**
+ * Insert copied elements (e.g. from the clipboard) so their combined center
+ * lands at `at`. Ids are regenerated; arrow bindings are remapped when the
+ * bound shape was copied too and stripped otherwise (the copied geometry is
+ * already the resolved fallback).
+ */
+export function pasteElements(
+  doc: Y.Doc,
+  elements: Y.Map<Y.Map<unknown>>,
+  copied: BoardElement[],
+  at: { x: number; y: number },
+): string[] {
+  if (copied.length === 0) return [];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const el of copied) {
+    minX = Math.min(minX, el.x);
+    minY = Math.min(minY, el.y);
+    maxX = Math.max(maxX, el.x + el.w);
+    maxY = Math.max(maxY, el.y + el.h);
+  }
+  const dx = at.x - (minX + maxX) / 2;
+  const dy = at.y - (minY + maxY) / 2;
+  const idMap = new Map(copied.map((el) => [el.id, nanoid(10)]));
+  doc.transact(() => {
+    for (const el of copied) {
+      const newId = idMap.get(el.id)!;
+      elements.set(
+        newId,
+        writeElement({
+          ...el,
+          id: newId,
+          x: el.x + dx,
+          y: el.y + dy,
+          order: nextOrder(elements),
+          startRef: el.startRef ? idMap.get(el.startRef) : undefined,
+          endRef: el.endRef ? idMap.get(el.endRef) : undefined,
+        }),
+      );
+    }
+  }, LOCAL_ORIGIN);
+  return [...idMap.values()];
+}
+
+/** Raise the given elements above everything else, preserving their relative order. */
+export function bringToFront(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: Iterable<string>) {
+  doc.transact(() => {
+    const sorted = [...ids]
+      .map((id) => elements.get(id))
+      .filter((el): el is Y.Map<unknown> => !!el)
+      .sort((a, b) => (((a.get("order") as number) ?? 0) - ((b.get("order") as number) ?? 0)));
+    for (const el of sorted) el.set("order", nextOrder(elements));
+  }, LOCAL_ORIGIN);
+}
+
+/** Lower the given elements below everything else, preserving their relative order. */
+export function sendToBack(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: Iterable<string>) {
+  doc.transact(() => {
+    let min = Infinity;
+    elements.forEach((el) => {
+      const o = (el.get("order") as number) ?? 0;
+      if (o < min) min = o;
+    });
+    const sorted = [...ids]
+      .map((id) => elements.get(id))
+      .filter((el): el is Y.Map<unknown> => !!el)
+      .sort((a, b) => (((a.get("order") as number) ?? 0) - ((b.get("order") as number) ?? 0)));
+    if (!Number.isFinite(min) || sorted.length === 0) return;
+    let order = min - sorted.length;
+    for (const el of sorted) el.set("order", order++);
+  }, LOCAL_ORIGIN);
 }
 
 /** Append points to a stroke while drawing, so peers watch it appear live. */

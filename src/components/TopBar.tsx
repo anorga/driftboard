@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Download, Link2, Moon, Sun } from "lucide-react";
+import { Check, Download, Eye, Link2, Moon, Sun, X } from "lucide-react";
 import type { WebsocketProvider } from "y-websocket";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -18,7 +18,9 @@ interface Props {
   user: UserInfo;
   onBoardNameChange?: (name: string) => void;
   onExport: () => void;
-  onJumpTo: (clientId: number) => void;
+  /** Client id currently being followed, if any */
+  followingId: number | null;
+  onToggleFollow: (clientId: number) => void;
 }
 
 function Avatar({ name, color, ring }: { name: string; color: string; ring?: boolean }) {
@@ -39,7 +41,7 @@ function Avatar({ name, color, ring }: { name: string; color: string; ring?: boo
   );
 }
 
-export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange, onExport, onJumpTo }: Props) {
+export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange, onExport, followingId, onToggleFollow }: Props) {
   const name = useMetaField(meta, "name", "");
   const peers = useRemotePeers(awareness);
   const status = useConnectionStatus(provider);
@@ -95,18 +97,33 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
       </div>
 
       {/* Right: presence + share + theme */}
-      <div className="pointer-events-auto flex items-center gap-3">
+      <div className="pointer-events-auto flex items-center gap-3" data-follow-ui>
+        {followingId != null && (
+          <button
+            onClick={() => onToggleFollow(followingId)}
+            title="Stop following"
+            className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold text-white shadow-lg"
+            style={{
+              background:
+                (peers.find((p) => p.clientId === followingId)?.state.user?.color) ?? "var(--accent)",
+            }}
+          >
+            <Eye size={13} />
+            Following {peers.find((p) => p.clientId === followingId)?.state.user?.name ?? "…"}
+            <X size={13} />
+          </button>
+        )}
         <div className="flex items-center rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-lg backdrop-blur-md">
           <div className="flex -space-x-2 pr-1">
             <Avatar name={user.name} color={user.color} ring />
             {peers.slice(0, 4).map(({ clientId, state }) => (
               <button
                 key={clientId}
-                onClick={() => onJumpTo(clientId)}
-                title={`Jump to ${state.user!.name}`}
+                onClick={() => onToggleFollow(clientId)}
+                title={followingId === clientId ? "Stop following" : `Follow ${state.user!.name}`}
                 className="cursor-pointer transition-transform hover:-translate-y-0.5"
               >
-                <Avatar name={state.user!.name} color={state.user!.color} />
+                <Avatar name={state.user!.name} color={state.user!.color} ring={followingId === clientId} />
               </button>
             ))}
             {peers.length > 4 && (

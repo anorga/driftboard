@@ -1,7 +1,8 @@
 import type { BoardElement } from "./types";
 import { getColor } from "./constants";
 import { strokeToPath } from "./stroke";
-import { elementBounds } from "./geometry";
+import { boardBounds } from "./geometry";
+import { decodeImage } from "./images";
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const out: string[] = [];
@@ -21,13 +22,18 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return out;
 }
 
+// Data URLs are immutable, so decoded bitmaps can be reused across export and
+// thumbnail passes instead of re-decoding multi-MB images every time.
+const decodeCache = new Map<string, Promise<HTMLImageElement | null>>();
+
 function loadImageEl(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
+  let promise = decodeCache.get(src);
+  if (!promise) {
+    if (decodeCache.size > 64) decodeCache.clear();
+    promise = decodeImage(src).catch(() => null);
+    decodeCache.set(src, promise);
+  }
+  return promise;
 }
 
 /** Decode every image element up front so drawing can stay synchronous. */
@@ -42,18 +48,6 @@ async function loadImages(els: BoardElement[]): Promise<Map<string, HTMLImageEle
       }),
   );
   return out;
-}
-
-export function boardBounds(els: BoardElement[]): { x: number; y: number; w: number; h: number } {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const el of els) {
-    const b = elementBounds(el);
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.w);
-    maxY = Math.max(maxY, b.y + b.h);
-  }
-  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
 /** Draw elements in world coordinates; the caller sets up the transform. */

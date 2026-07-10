@@ -43,20 +43,23 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-function decode(blob: Blob): Promise<HTMLImageElement> {
+/** Decode any image source (data URL, object URL) into an HTMLImageElement. */
+export function decodeImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
     const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("could not decode image"));
-    };
-    img.src = url;
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("could not decode image"));
+    img.src = src;
   });
+}
+
+async function decode(blob: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(blob);
+  try {
+    return await decodeImage(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /**
@@ -85,10 +88,15 @@ export async function loadImage(file: Blob): Promise<LoadedImage> {
   // blows the budget.
   let src = canvas.toDataURL("image/webp", 0.85);
   if (src.length > MAX_DATA_URL_BYTES) {
+    // JPEG has no alpha and would composite transparency onto black — redraw
+    // on a white underlay so transparent images degrade gracefully.
+    ctx.globalCompositeOperation = "destination-over";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, dims.w, dims.h);
     src = canvas.toDataURL("image/jpeg", 0.8);
-  }
-  if (src.length > MAX_DATA_URL_BYTES) {
-    src = canvas.toDataURL("image/jpeg", 0.5);
+    if (src.length > MAX_DATA_URL_BYTES) {
+      src = canvas.toDataURL("image/jpeg", 0.5);
+    }
   }
   return { src, w: dims.w, h: dims.h };
 }

@@ -22,8 +22,12 @@ export const MESSAGE_AWARENESS = 1;
 
 const CONN_OPEN = 1; // WebSocket.OPEN
 
-/** Board room names are nanoid(10) ids; be lenient but keep them filesystem-safe. */
-export const ROOM_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/**
+ * Board room names are nanoid(10) ids, but hand-typed URLs (percent-encoded
+ * spaces, dots) worked historically, so allow them too. No path separators;
+ * the snapshot store additionally encodes names before touching the disk.
+ */
+export const ROOM_NAME_RE = /^[A-Za-z0-9_%.~-]{1,128}$/;
 
 export interface Conn {
   send(data: Uint8Array): void;
@@ -165,7 +169,15 @@ export class RoomManager {
     if (this.rooms.size >= this.maxRooms) return null;
     const room = new Room(name);
     const snapshot = this.store?.load(name);
-    if (snapshot) Y.applyUpdate(room.doc, snapshot);
+    if (snapshot) {
+      try {
+        Y.applyUpdate(room.doc, snapshot);
+      } catch (err) {
+        // A corrupt snapshot must not crash the server (clients re-seed from
+        // IndexedDB); start the room empty instead.
+        console.error(`corrupt snapshot for room "${name}" — starting empty`, err);
+      }
+    }
     if (this.store) {
       room.doc.on("update", () => this.store!.scheduleSave(name, room.doc));
     }
@@ -175,9 +187,12 @@ export class RoomManager {
 
   /**
    * Call when a connection leaves. Empty rooms are persisted and dropped
-   * after a grace period (so a refresh doesn't tear the room down).
+   * after a grace period (so a refresh doesn't tear the room down). Without
+   * a snapshot store there is nowhere to persist to, so rooms live for the
+   * process lifetime instead of being destroyed.
    */
   onLeave(room: Room) {
+    if (!this.store) return;
     if (room.conns.size > 0 || this.evictTimers.has(room.name)) return;
     const timer = setTimeout(() => {
       this.evictTimers.delete(room.name);

@@ -20,8 +20,10 @@ import { SnapshotStore } from "./persistence.ts";
 const PORT = Number(process.env.PORT) || 1234;
 const HOST = process.env.HOST || "0.0.0.0";
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 1000;
-// Generous enough for boards with embedded images, small enough to stop abuse.
-const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+// Must fit a full-document SyncStep2 (a re-seeding client sends the whole
+// board in one message, and image-heavy boards run large) while still
+// bounding what a hostile client can make the server buffer.
+const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,8 +55,12 @@ function cacheControl(filePath: string): string {
   return "public, max-age=3600";
 }
 
+// Only content-hashed files are safe to cache for the process lifetime; an
+// in-place rebuild of dist/ rewrites index.html, which must be read fresh so
+// it never references bundles that no longer exist.
 const fileCache = new Map<string, Buffer>();
 function readStatic(filePath: string): Buffer {
+  if (!filePath.includes(`${path.sep}assets${path.sep}`)) return readFileSync(filePath);
   let data = fileCache.get(filePath);
   if (!data) {
     data = readFileSync(filePath);
@@ -65,8 +71,8 @@ function readStatic(filePath: string): Buffer {
 
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("ok");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, connections: wss.clients.size }));
     return;
   }
   if (!hasDist) {
@@ -89,10 +95,28 @@ const server = http.createServer((req, res) => {
   res.end(readStatic(filePath));
 });
 
-const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
+// Optional browser-origin allowlist (comma-separated). Unset = allow all,
+// which split client/server deploys need. Non-browser clients (no Origin
+// header) always pass — this is CSRF-style protection, not auth.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const wss = new WebSocketServer({
+  server,
+  maxPayload: MAX_MESSAGE_BYTES,
+  // Sync payloads (especially image-heavy SyncStep2) compress well
+  perMessageDeflate: { threshold: 1024 },
+});
 
 wss.on("connection", (conn, req) => {
   conn.binaryType = "arraybuffer";
+  const origin = req.headers.origin;
+  if (allowedOrigins.length > 0 && origin && !allowedOrigins.includes(origin)) {
+    conn.close(1008, "origin not allowed");
+    return;
+  }
   const roomName = (req.url || "/").slice(1).split("?")[0] || "default";
   if (!ROOM_NAME_RE.test(roomName)) {
     conn.close(1008, "invalid room name");

@@ -55,3 +55,16 @@ export function removeRecentBoard(id: string) {
     // ignore
   }
 }
+
+/**
+ * Drop this device's copy of a board: the recents entry and the IndexedDB
+ * mirror. The shared board itself stays reachable at its URL.
+ */
+export function deleteLocalBoard(id: string) {
+  removeRecentBoard(id);
+  try {
+    indexedDB.deleteDatabase(`driftboard:${id}`);
+  } catch {
+    // no IndexedDB (private mode) — nothing to delete
+  }
+}

@@ -11,8 +11,10 @@ A real-time collaborative whiteboard. Sticky notes, shapes, and freehand sketchi
 - **Infinite canvas**: pan (space-drag, hand tool, trackpad), zoom to cursor (pinch / ⌘-scroll), zoom-to-fit, two-finger pinch on touch devices
 - **Sticky notes, text, rectangles, ellipses, arrows, images, and a pressure-sensitive pen** (smooth strokes via perfect-freehand)
 - **Images**: paste from the clipboard or drop files onto the board — they're downscaled, embedded in the document, and sync like everything else
-- **Arrows that stick to shapes**: draw an arrow from one shape to another and it stays attached while either one moves
+- **Arrows that stick to shapes**: draw an arrow from one shape to another and it stays attached while either one moves; grab an endpoint to reconnect it
 - **Real-time multiplayer**: live cursors with name tags, presence avatars, edits appear as they happen
+- **Follow mode**: click a collaborator's avatar to ride along with their viewport, Figma-style
+- **Copy/paste**: ⌘C/⌘V elements within and across boards, ⌘A select-all, arrow-key nudging, bring-to-front/send-to-back
 - **Cursor chat**: press `/` and talk right at your cursor, Figma-style
 - **Laser pointer**: present with a fading trail everyone sees live
 - **Remote selections**: see what each collaborator has selected, outlined in their color; click an avatar to jump to them
@@ -50,6 +52,7 @@ Tests, typecheck, and lint (also run in CI on every push):
 npm test           # Vitest: sync protocol, CRDT semantics, geometry, arrow bindings
 npm run typecheck
 npm run lint
+npm run build && npm run test:e2e   # Playwright: two real browsers collaborating live
 ```
 
 ## Production / deploy
@@ -75,9 +78,12 @@ npm start          # serves dist/ + WebSocket sync on $PORT
 | `N` `T` `R` `O` `A` `P` `L` | Sticky · Text · Rectangle · Ellipse · Arrow · Pen · Laser |
 | `/` | Cursor chat |
 | `⌘Z` / `⇧⌘Z` | Undo / Redo (your changes only) |
-| `⌘V` | Paste an image from the clipboard |
+| `⌘C` / `⌘X` / `⌘V` | Copy / cut / paste elements & images (works across boards) |
+| `⌘A` | Select all |
 | `⌘D` | Duplicate selection |
 | `⌫` | Delete selection |
+| Arrows / `⇧`+arrows | Nudge selection 1px / 10px |
+| `]` / `[` | Bring to front / send to back |
 | `Space`-drag | Pan |
 | `⌘`-scroll / pinch | Zoom |
 | Double-click | Quick sticky note / edit text |

@@ -58,6 +58,8 @@ export interface AwarenessState {
   laser?: { x: number; y: number; t: number } | null;
   /** Element ids this user has selected */
   selection?: string[];
+  /** Current viewport camera, for follow mode */
+  view?: Camera | null;
 }
 
 export interface RecentBoard {
