@@ -47,8 +47,15 @@ function writeElement(fields: NewElement & { id: string; order: number }): Y.Map
   ymap.set("h", fields.h);
   ymap.set("color", fields.color);
   ymap.set("order", fields.order);
-  for (const key of ["text", "size", "src", "startRef", "endRef"] as const) {
+  for (const key of ["size", "src", "startRef", "endRef"] as const) {
     if (fields[key] !== undefined) ymap.set(key, fields[key]);
+  }
+  // Text is a Y.Text so two people typing into the same note merge
+  // character-for-character instead of last-write-wins on a scalar field.
+  if (fields.text !== undefined) {
+    const yt = new Y.Text();
+    if (fields.text.length > 0) yt.insert(0, fields.text);
+    ymap.set("text", yt);
   }
   if (fields.points !== undefined) {
     const arr = new Y.Array<number>();
@@ -78,7 +85,10 @@ export function updateElement(
 /**
  * Apply field patches. A key explicitly set to `undefined` is DELETED from
  * the element (used to clear arrow bindings) — don't spread optional fields
- * into a patch unless that's what you mean.
+ * into a patch unless that's what you mean. `text` is special: it's stored as
+ * a Y.Text so concurrent edits merge character-for-character, so it's routed
+ * through the diff path instead of a plain `el.set` (which would clobber the
+ * shared type with a scalar).
  */
 export function updateElements(
   doc: Y.Doc,
@@ -91,11 +101,62 @@ export function updateElements(
       if (!el) continue;
       for (const [k, v] of Object.entries(patch)) {
         if (k === "points") continue; // points are append-only via appendStrokePoints
+        if (k === "text") {
+          writeTextInto(el, typeof v === "string" ? v : "");
+          continue;
+        }
         if (v === undefined) el.delete(k);
         else el.set(k, v);
       }
     }
   }, LOCAL_ORIGIN);
+}
+
+/**
+ * Make an element's `text` field a Y.Text and diff it to `to`, so two people
+ * typing into the same note merge instead of last-write-wins. The migration
+ * (scalar → Y.Text) and the diff happen in one transaction, so a legacy note
+ * is upgraded and edited in a single undo step. Callers must be inside a
+ * `doc.transact` (see updateElements / setText).
+ */
+function writeTextInto(el: Y.Map<unknown>, to: string) {
+  const existing = el.get("text");
+  let t: Y.Text;
+  if (existing instanceof Y.Text) {
+    t = existing;
+  } else {
+    const legacy = typeof existing === "string" ? existing : "";
+    t = new Y.Text();
+    if (legacy.length > 0) t.insert(0, legacy);
+    el.set("text", t);
+  }
+  applyTextDiff(t, to);
+}
+
+/** Set an element's text with collaborative (character-level) semantics. */
+export function setText(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, id: string, to: string) {
+  const el = elements.get(id);
+  if (!el) return;
+  doc.transact(() => writeTextInto(el, to), LOCAL_ORIGIN);
+}
+
+/**
+ * Minimal Y.Text edit to turn the current text into `to`: delete the changed
+ * middle, insert the new middle. Common prefix/suffix are kept, so an append
+ * (the common typing case) is a single insert and a deletion is a single
+ * delete. Applied to a Y.Text so concurrent edits from peers merge.
+ */
+function applyTextDiff(yt: Y.Text, to: string) {
+  const from = yt.toString();
+  if (from === to) return;
+  let i = 0;
+  while (i < from.length && i < to.length && from[i] === to[i]) i++;
+  let j = 0;
+  while (j < from.length - i && j < to.length - i && from[from.length - 1 - j] === to[to.length - 1 - j]) j++;
+  const deleteLen = from.length - i - j;
+  if (deleteLen > 0) yt.delete(i, deleteLen);
+  const insert = to.slice(i, to.length - j);
+  if (insert.length > 0) yt.insert(i, insert);
 }
 
 export function deleteElements(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: Iterable<string>) {

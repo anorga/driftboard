@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Download, Eye, Link2, Moon, Sun, X } from "lucide-react";
+import { Check, Database, Download, Eye, Link2, Moon, Sun, X } from "lucide-react";
 import type { WebsocketProvider } from "y-websocket";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -16,6 +16,8 @@ interface Props {
   provider: WebsocketProvider;
   awareness: Awareness;
   user: UserInfo;
+  /** Local IndexedDB mirror is ready (contents available offline). */
+  idbReady: boolean;
   onBoardNameChange?: (name: string) => void;
   onExport: () => void;
   /** Client id currently being followed, if any */
@@ -41,7 +43,7 @@ function Avatar({ name, color, ring }: { name: string; color: string; ring?: boo
   );
 }
 
-export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange, onExport, followingId, onToggleFollow }: Props) {
+export function TopBar({ doc, meta, provider, awareness, user, idbReady, onBoardNameChange, onExport, followingId, onToggleFollow }: Props) {
   const name = useMetaField(meta, "name", "");
   const peers = useRemotePeers(awareness);
   const status = useConnectionStatus(provider);
@@ -73,6 +75,9 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
     status === "connected" ? "#22c55e" : status === "connecting" ? "#eab308" : "#ef4444";
   const statusLabel =
     status === "connected" ? "Live" : status === "connecting" ? "Connecting" : "Offline";
+  // Accurate secondary state: the local mirror holds the board, so it keeps
+  // working without a connection. We do NOT claim per-change durability.
+  const offlineReady = status === "disconnected" && idbReady;
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between p-4">
@@ -85,14 +90,26 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Untitled board"
+          aria-label="Board name"
           className="w-44 bg-transparent text-sm font-semibold text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
         />
-        <div className="flex items-center gap-1.5" title={`Sync: ${statusLabel}`}>
+        <div
+          role="status"
+          aria-label={`Sync status: ${statusLabel}${offlineReady ? " — available offline" : ""}`}
+          className="flex items-center gap-1.5"
+        >
           <span
+            aria-hidden="true"
             className="h-2 w-2 rounded-full"
             style={{ background: statusColor, boxShadow: `0 0 6px ${statusColor}` }}
           />
           <span className="text-[11px] font-medium text-[var(--muted)]">{statusLabel}</span>
+          {offlineReady && (
+            <span className="flex items-center gap-1 rounded-full bg-[var(--hover)] px-2 py-0.5 text-[10px] font-semibold text-[var(--muted)]">
+              <Database aria-hidden="true" size={11} />
+              Available offline
+            </span>
+          )}
         </div>
       </div>
 
@@ -102,15 +119,16 @@ export function TopBar({ doc, meta, provider, awareness, user, onBoardNameChange
           <button
             onClick={() => onToggleFollow(followingId)}
             title="Stop following"
+            aria-label={`Stop following ${peers.find((p) => p.clientId === followingId)?.state.user?.name ?? "peer"}`}
             className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-semibold text-white shadow-lg"
             style={{
               background:
                 (peers.find((p) => p.clientId === followingId)?.state.user?.color) ?? "var(--accent)",
             }}
           >
-            <Eye size={13} />
+            <Eye aria-hidden="true" size={13} />
             Following {peers.find((p) => p.clientId === followingId)?.state.user?.name ?? "…"}
-            <X size={13} />
+            <X aria-hidden="true" size={13} />
           </button>
         )}
         <div className="flex items-center rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-lg backdrop-blur-md">

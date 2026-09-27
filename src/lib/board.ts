@@ -173,6 +173,26 @@ export function useRemotePeers(awareness: Awareness): Array<{ clientId: number; 
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+/**
+ * True once the local IndexedDB mirror has finished its initial load, i.e.
+ * the board's contents are available offline. This is an initialization
+ * signal, NOT a per-change durability ack — use it to say "available
+ * offline", never "every change is saved".
+ */
+export function useIdbReady(idb: IndexeddbPersistence): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    idb.whenSynced.then(() => {
+      if (!cancelled) setReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [idb]);
+  return ready;
+}
+
 export function useConnectionStatus(provider: WebsocketProvider): ConnectionStatus {
   return useSyncExternalStore(
     (cb) => {

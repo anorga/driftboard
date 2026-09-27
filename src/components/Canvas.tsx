@@ -26,6 +26,7 @@ import { detachArrowPatches, hitTestBindTarget } from "../lib/arrows";
 import { ElementView } from "./ElementView";
 import { CursorsOverlay } from "./CursorsOverlay";
 import { LaserOverlay } from "./LaserOverlay";
+import { EmptyHint } from "./EmptyHint";
 import { useRemotePeers } from "../lib/board";
 
 type HandleId = "nw" | "ne" | "sw" | "se";
@@ -89,6 +90,62 @@ export function Canvas({
   const chatClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastScreen = useRef<Point>({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const peers = useRemotePeers(conn.awareness);
+
+  // ---- Pen point batching ----
+  // While drawing, points accumulate in a buffer and reach the Y.Array one
+  // batch per animation frame instead of one Yjs transaction per pointermove.
+  // Peers still watch the stroke grow live; a synchronous flush before
+  // normalizeStroke guarantees the geometry is complete before it is rebased.
+  const penBufferRef = useRef<number[]>([]);
+  const penFlushRef = useRef<number | null>(null);
+
+  const flushPenNow = useCallback(
+    (id: string) => {
+      if (penFlushRef.current != null) {
+        cancelAnimationFrame(penFlushRef.current);
+        penFlushRef.current = null;
+      }
+      const buf = penBufferRef.current;
+      penBufferRef.current = [];
+      if (buf.length > 0) appendStrokePoints(conn.doc, conn.elements, id, buf);
+    },
+    [conn],
+  );
+
+  // Canceled strokes (e.g. a two-finger pinch abandons the pen) drop their
+  // pending points instead of writing them to a deleted element.
+  const discardPenFlush = useCallback(() => {
+    if (penFlushRef.current != null) {
+      cancelAnimationFrame(penFlushRef.current);
+      penFlushRef.current = null;
+    }
+    penBufferRef.current = [];
+  }, []);
+
+  const schedulePenFlush = useCallback(() => {
+    if (penFlushRef.current != null) return;
+    penFlushRef.current = requestAnimationFrame(() => {
+      penFlushRef.current = null;
+      const drag = dragRef.current;
+      // A normal gesture end flushes synchronously (see finishDrag); only an
+      // interrupted one reaches here with a leftover buffer.
+      if (drag?.mode === "pen") flushPenNow(drag.id);
+      else discardPenFlush();
+    });
+  }, [discardPenFlush, flushPenNow]);
+
+  // The empty-state hint must not flash while an existing board's content is
+  // still streaming in from IndexedDB / the server.
+  const [boardReady, setBoardReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    conn.idb.whenSynced.then(() => {
+      if (!cancelled) setBoardReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conn.idb]);
 
   // Refs so window-level drag handlers never see stale state
   const cameraRef = useRef(camera);
@@ -399,7 +456,8 @@ export function Canvas({
           if (Math.hypot(world.x - drag.lastWorld.x, world.y - drag.lastWorld.y) < 0.75 / cameraRef.current.z) return;
           drag.lastWorld = world;
           const pressure = e.pressure && e.pressure > 0 ? e.pressure : 0.5;
-          appendStrokePoints(conn.doc, conn.elements, drag.id, [world.x, world.y, pressure]);
+          penBufferRef.current.push(world.x, world.y, pressure);
+          schedulePenFlush();
           break;
         }
         case "resize": {
@@ -422,15 +480,34 @@ export function Canvas({
     [conn, sendCursor, setCamera, setSelection, toScreen],
   );
 
-  const onWindowUp = useCallback(() => {
+  // Centralized gesture termination: detaches the window listeners added by
+  // beginDrag (move + up + cancel). We remove the exact stored references, so
+  // pointerup and pointercancel can't double-fire after either has ended the
+  // gesture.
+  const dragHandlers = useRef<{ move?: (e: PointerEvent) => void; up?: () => void }>({});
+  const detachDragListeners = useCallback(() => {
+    const { move, up } = dragHandlers.current;
+    if (move) window.removeEventListener("pointermove", move);
+    if (up) {
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    }
+    dragHandlers.current = {};
+  }, []);
+
+  // Runs on BOTH pointerup and pointercancel. A canceled gesture commits the
+  // in-progress element (same as a normal release) rather than discarding it —
+  // losing a half-drawn stroke or a mid-drag move is worse than keeping it.
+  const finishDrag = useCallback(() => {
     const drag = dragRef.current;
     dragRef.current = null;
-    window.removeEventListener("pointermove", onWindowMove);
+    detachDragListeners();
     setPanning(false);
     if (!drag) return;
 
     if (drag.mode === "marquee") setMarquee(null);
     if (drag.mode === "pen") {
+      flushPenNow(drag.id); // all points in the doc before rebasing geometry
       normalizeStroke(conn.doc, conn.elements, drag.id);
     }
     if (drag.mode === "shape") {
@@ -473,7 +550,7 @@ export function Canvas({
     }
     // Each gesture is one undo step
     conn.undo.stopCapturing();
-  }, [conn, onWindowMove, setSelection, setTool]);
+  }, [conn, flushPenNow, detachDragListeners, setSelection, setTool]);
 
   const dragPointerTypeRef = useRef<string>("mouse");
   const beginDrag = useCallback(
@@ -484,11 +561,21 @@ export function Canvas({
       conn.undo.stopCapturing();
       dragRef.current = drag;
       dragPointerTypeRef.current = pointerType;
+      // pointercancel ends the gesture like a release (committing, not
+      // discarding); the same finish handler runs on either.
+      const onUp = () => finishDrag();
       window.addEventListener("pointermove", onWindowMove);
-      window.addEventListener("pointerup", onWindowUp, { once: true });
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      dragHandlers.current = { move: onWindowMove, up: onUp };
     },
-    [conn, onWindowMove, onWindowUp],
+    [conn, onWindowMove, finishDrag],
   );
+
+  // A gesture can still be live when the component unmounts (e.g. route change
+  // mid-drag): commit the in-progress element (flushing its pen buffer) and
+  // detach its window listeners so nothing leaks onto the next view.
+  useEffect(() => () => finishDrag(), [finishDrag]);
 
   // Second touch lands anywhere on the canvas: abandon the single-finger
   // gesture (deleting a just-started element, which was accidental) and
@@ -506,10 +593,13 @@ export function Canvas({
       if (touchesRef.current.size !== 2) return;
       const drag = dragRef.current;
       if (drag && (drag.mode === "pen" || drag.mode === "shape" || drag.mode === "arrow")) {
+        // A canceled pen drops its buffered points (and cancels the pending
+        // flush) so nothing is written to the element we're about to delete.
+        if (drag.mode === "pen") discardPenFlush();
         deleteElements(conn.doc, conn.elements, [drag.id]);
       }
       dragRef.current = null;
-      onWindowUp(); // detach drag listeners, reset panning
+      finishDrag(); // detach drag listeners, reset panning (commits the aborted gesture)
       setMarquee(null);
       setSnapId(null);
       const [a, b] = [...touchesRef.current.values()];
@@ -520,7 +610,7 @@ export function Canvas({
     };
     vp.addEventListener("pointerdown", onDown, { capture: true });
     return () => vp.removeEventListener("pointerdown", onDown, { capture: true });
-  }, [conn, onWindowUp, toScreen]);
+  }, [conn, finishDrag, discardPenFlush, toScreen]);
 
   // ---- Canvas (empty space) pointer down ----
   const onCanvasPointerDown = useCallback(
@@ -670,6 +760,26 @@ export function Canvas({
     [conn],
   );
   const onTextCommit = useCallback(() => setEditingId(null), [setEditingId]);
+  // Content outgrew its box: grow the stored height (grow-only, already capped
+  // + guarded in ElementView) so text is never silently clipped.
+  const onGrow = useCallback(
+    (id: string, h: number) => updateElement(conn.doc, conn.elements, id, { h }),
+    [conn],
+  );
+
+  // Keyboard focus on a board element selects it, so the selection action bar
+  // (color / nudge / delete / z-order) becomes reachable without a mouse.
+  const onFocusEl = useCallback(
+    (id: string) => {
+      setSelection((sel) => {
+        if (sel.has(id)) return sel;
+        const next = new Set(sel);
+        next.add(id);
+        return next;
+      });
+    },
+    [setSelection],
+  );
 
   // Double-click empty canvas -> quick sticky
   const onCanvasDoubleClick = useCallback(
@@ -834,6 +944,8 @@ export function Canvas({
             onDoubleClick={onElementDoubleClick}
             onTextChange={onTextChange}
             onTextCommit={onTextCommit}
+            onGrow={onGrow}
+            onFocusEl={onFocusEl}
           />
         ))}
 
@@ -938,6 +1050,8 @@ export function Canvas({
 
       <CursorsOverlay awareness={conn.awareness} camera={camera} />
       <LaserOverlay awareness={conn.awareness} camera={camera} />
+
+      <EmptyHint count={els.length} ready={boardReady} />
 
       {chat && (
         <div

@@ -56,3 +56,5 @@ export const GRID_SIZE = 24;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 4;
 export const STICKY_DEFAULT = 190;
+/** Notes grow with their text up to this height, then become scrollable. */
+export const MAX_TEXT_H = 1200;

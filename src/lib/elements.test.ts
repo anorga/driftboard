@@ -144,3 +144,78 @@ describe("deleteElements", () => {
     expect(els.has(id)).toBe(false);
   });
 });
+
+describe("collaborative text (Y.Text)", () => {
+  function sync(a: ReturnType<typeof makeDoc>, b: ReturnType<typeof makeDoc>) {
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc));
+  }
+
+  it("stores text as a Y.Text that serializes back to a plain string", () => {
+    const { doc, els } = makeDoc();
+    const id = addElement(doc, els, { type: "sticky", x: 0, y: 0, w: 10, h: 10, color: "yellow", text: "hello" });
+    // toJSON() must flatten the nested Y.Text so render/export/clipboard see a string.
+    const json = els.get(id)!.toJSON() as BoardElement;
+    expect(json.text).toBe("hello");
+    expect(json.text).not.toBeInstanceOf(Y.Text);
+  });
+
+  it("migrates a legacy string field to a Y.Text on first update", () => {
+    const { doc, els } = makeDoc();
+    const raw = new Y.Map<unknown>();
+    raw.set("id", "legacy");
+    raw.set("type", "sticky");
+    raw.set("text", "old"); // a plain string, as an old board would store it
+    els.set("legacy", raw);
+    updateElement(doc, els, "legacy", { text: "old!" });
+    // The raw value is now a Y.Text (in-place upgrade), and JSON is a string.
+    expect(els.get("legacy")!.get("text")).toBeInstanceOf(Y.Text);
+    expect((els.get("legacy")!.toJSON() as BoardElement).text).toBe("old!");
+  });
+
+  it("merges concurrent character edits from two clients", () => {
+    const a = makeDoc();
+    const b = makeDoc();
+    const id = addElement(a.doc, a.els, { type: "sticky", x: 0, y: 0, w: 10, h: 10, color: "yellow", text: "hi" });
+    sync(a, b);
+
+    // Both type at the end while offline — a merge, not last-write-wins.
+    updateElement(a.doc, a.els, id, { text: "hi there" });
+    updateElement(b.doc, b.els, id, { text: "hi bob" });
+
+    sync(a, b);
+    // The order of two concurrent inserts is decided by client id (a
+    // legitimate CRDT tie-break) — the invariant we care about is that BOTH
+    // edits are merged, nothing is lost to last-write-wins.
+    for (const side of [a, b]) {
+      const text = get(side.els, id).text ?? "";
+      expect(text).toContain("there");
+      expect(text).toContain("bob");
+      // "hi" + " there" + " bob" — both appends present, nothing lost.
+      expect(text.length).toBe(2 + 6 + 4);
+    }
+  });
+
+  it("undoing a local append preserves a remote edit in the middle", () => {
+    const a = makeDoc();
+    const b = makeDoc();
+    a.doc.on("update", (u: Uint8Array) => Y.applyUpdate(b.doc, u, "remote"));
+    b.doc.on("update", (u: Uint8Array) => Y.applyUpdate(a.doc, u, "remote"));
+    // One manager per client, created before any edits (as board.ts does),
+    // tracking only that client's local origin. captureTimeout:0 so each
+    // transaction is its own undo item (real users gesture >350ms apart, so
+    // this is the same isolation they get in the app).
+    const undoA = new Y.UndoManager(a.els, { trackedOrigins: new Set([LOCAL_ORIGIN]), captureTimeout: 0 });
+
+    const id = addElement(a.doc, a.els, { type: "sticky", x: 0, y: 0, w: 10, h: 10, color: "yellow", text: "hi" });
+    // A's local create is one undo item. B's remote edit is not tracked by A.
+    updateElement(b.doc, b.els, id, { text: "hi there" }); // B's remote middle edit
+    // A appends locally in a SEPARATE transaction (captureTimeout:0), so it's
+    // a distinct undo item from the element-creation above.
+    updateElement(a.doc, a.els, id, { text: "hi there!" });
+
+    undoA.undo(); // revert only A's local "!" append
+
+    expect(get(a.els, id).text).toBe("hi there"); // A's "!" gone, B's "there" kept
+  });
+});
