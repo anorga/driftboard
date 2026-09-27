@@ -4,6 +4,7 @@ import {
   useBoardConnection,
   useElements,
   useMetaField,
+  useIdbReady,
   useUndoState,
 } from "../lib/board";
 import {
@@ -14,6 +15,7 @@ import {
   updateElements,
 } from "../lib/elements";
 import { CLIPBOARD_MARKER } from "../lib/clipboard";
+import { useCameraController } from "../lib/useCameraController";
 import { detachArrowPatches, resolveArrows } from "../lib/arrows";
 import { getLocalUser, touchRecentBoard } from "../lib/user";
 import type { Camera, Tool } from "../lib/types";
@@ -47,10 +49,14 @@ export function BoardPage() {
   const els = useMemo(() => resolveArrows(rawEls), [rawEls]);
   const boardName = useMetaField(conn.meta, "name", "");
   const { canUndo, canRedo } = useUndoState(conn.undo);
+  const idbReady = useIdbReady(conn.idb);
   const user = useMemo(getLocalUser, []);
 
   const [tool, setTool] = useState<Tool>("select");
   const [camera, setCamera] = useState<Camera>({ x: -100, y: -80, z: 1 });
+  // Discrete camera moves tween; gestures write instantly; follow mode
+  // eases toward a retargetable goal (see useCameraController).
+  const cam = useCameraController(camera, setCamera);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawColor, setDrawColor] = useState("yellow");
@@ -103,7 +109,9 @@ export function BoardPage() {
 
   const [followingId, setFollowingId] = useState<number | null>(null);
 
-  // While following, mirror the followed user's camera as it streams in
+  // While following, ease toward the followed user's camera as it streams in
+  // (one retargetable loop — new snapshots move the goal, they don't stack
+  // new tweens, so we don't trail behind the followed peer).
   useEffect(() => {
     if (followingId == null) return;
     const apply = () => {
@@ -112,12 +120,19 @@ export function BoardPage() {
         setFollowingId(null); // they left
         return;
       }
-      if (state.view) setCamera({ ...state.view });
+      if (state.view) {
+        cam.followTarget(state.view);
+      }
     };
     apply();
     conn.awareness.on("change", apply);
     return () => conn.awareness.off("change", apply);
-  }, [conn, followingId]);
+  }, [conn, followingId, cam]);
+
+  // Leaving follow mode stops the easing loop.
+  useEffect(() => {
+    if (followingId == null) cam.cancel();
+  }, [followingId, cam]);
 
   // Taking control back (any interaction outside the presence UI) stops following
   useEffect(() => {
@@ -175,21 +190,41 @@ export function BoardPage() {
     setSelection(new Set(ids));
   }, [conn, selection]);
 
-  // Copy resolved elements so bound arrows carry usable fallback geometry
-  const doCopy = useCallback(() => {
-    if (selection.size === 0) return;
-    const copied = els.filter((el) => selection.has(el.id));
-    void navigator.clipboard
-      .writeText(JSON.stringify({ [CLIPBOARD_MARKER]: 1, elements: copied }))
-      .catch(() => {
-        // clipboard unavailable (permissions/http) — nothing to do
-      });
-  }, [els, selection]);
+  // Copy resolved elements so bound arrows carry usable fallback geometry.
+  // We write through the native copy/cut event's clipboardData (synchronous)
+  // rather than a fire-and-forget writeText — the async write can lose to an
+  // immediate ⌘V, leaving the paste empty.
+  const writeSelectionToClipboard = useCallback(
+    (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      const typing =
+        target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable;
+      if (typing || selection.size === 0 || !e.clipboardData) return false;
+      const copied = els.filter((el) => selection.has(el.id));
+      e.clipboardData.setData(
+        "text/plain",
+        JSON.stringify({ [CLIPBOARD_MARKER]: 1, elements: copied }),
+      );
+      e.preventDefault();
+      return true;
+    },
+    [els, selection],
+  );
 
-  const doCut = useCallback(() => {
-    doCopy();
-    doDelete();
-  }, [doCopy, doDelete]);
+  useEffect(() => {
+    const onCopy = (e: ClipboardEvent) => {
+      writeSelectionToClipboard(e);
+    };
+    const onCut = (e: ClipboardEvent) => {
+      if (writeSelectionToClipboard(e)) doDelete();
+    };
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("cut", onCut);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("cut", onCut);
+    };
+  }, [doDelete, writeSelectionToClipboard]);
 
   const doFront = useCallback(() => {
     if (selection.size > 0) bringToFront(conn.doc, conn.elements, selection);
@@ -211,8 +246,8 @@ export function BoardPage() {
   );
 
   // ---- Keyboard shortcuts ----
-  const stateRef = useRef({ doDelete, doDuplicate, doCopy, doCut, doFront, doBack, editingId, selection, els });
-  stateRef.current = { doDelete, doDuplicate, doCopy, doCut, doFront, doBack, editingId, selection, els };
+  const stateRef = useRef({ doDelete, doDuplicate, doFront, doBack, editingId, selection, els });
+  stateRef.current = { doDelete, doDuplicate, doFront, doBack, editingId, selection, els };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -232,16 +267,6 @@ export function BoardPage() {
         if (typing) return;
         e.preventDefault();
         stateRef.current.doDuplicate();
-        return;
-      }
-      if (mod && e.key.toLowerCase() === "c") {
-        if (typing) return;
-        stateRef.current.doCopy();
-        return;
-      }
-      if (mod && e.key.toLowerCase() === "x") {
-        if (typing) return;
-        stateRef.current.doCut();
         return;
       }
       if (mod && e.key.toLowerCase() === "a") {
@@ -324,7 +349,7 @@ export function BoardPage() {
         tool={tool}
         setTool={setTool}
         camera={camera}
-        setCamera={setCamera}
+        setCamera={cam.instant}
         selection={selection}
         setSelection={setSelection}
         editingId={editingId}
@@ -338,6 +363,7 @@ export function BoardPage() {
         provider={conn.provider}
         awareness={conn.awareness}
         user={user}
+        idbReady={idbReady}
         onBoardNameChange={(name) => touchRecentBoard(roomId, name || "Untitled board")}
         onExport={doExport}
         followingId={followingId}
@@ -361,7 +387,7 @@ export function BoardPage() {
         onUndo={() => conn.undo.undo()}
         onRedo={() => conn.undo.redo()}
       />
-      <ZoomControls camera={camera} setCamera={setCamera} els={els} viewportSize={viewportSize} />
+      <ZoomControls camera={camera} animateTo={cam.tweenTo} els={els} viewportSize={viewportSize} />
       <button
         title="Keyboard shortcuts (?)"
         onClick={() => setHelpOpen(true)}

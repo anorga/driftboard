@@ -4,21 +4,21 @@ import { fitCamera, zoomAt } from "../lib/geometry";
 
 interface Props {
   camera: Camera;
-  setCamera: React.Dispatch<React.SetStateAction<Camera>>;
+  /** Discrete camera moves (tweened). */
+  animateTo: (target: Camera | ((c: Camera) => Camera), ms?: number) => void;
   els: BoardElement[];
   viewportSize: () => { width: number; height: number };
 }
 
-export function ZoomControls({ camera, setCamera, els, viewportSize }: Props) {
+export function ZoomControls({ camera, animateTo, els, viewportSize }: Props) {
   const center = () => {
     const { width, height } = viewportSize();
     return { x: width / 2, y: height / 2 };
   };
   const zoomBy = (factor: number) =>
-    setCamera((cam) => zoomAt(cam, center(), cam.z * factor));
-  const reset = () =>
-    setCamera((cam) => zoomAt(cam, center(), 1));
-  const fit = () => setCamera((cam) => fitCamera(els, viewportSize(), cam));
+    animateTo((cam) => zoomAt(cam, center(), cam.z * factor));
+  const reset = () => animateTo((cam) => zoomAt(cam, center(), 1));
+  const fit = () => animateTo((cam) => fitCamera(els, viewportSize(), cam));
 
   return (
     <div className="pointer-events-auto absolute bottom-5 right-4 z-20 flex items-center gap-0.5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-lg backdrop-blur-md">

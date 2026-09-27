@@ -173,6 +173,84 @@ export function useRemotePeers(awareness: Awareness): Array<{ clientId: number; 
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+/**
+ * True once the board's *content* has finished loading — the local IndexedDB
+ * mirror AND, when online, the server's initial sync. This is the gate for the
+ * empty-state hint: without it, a fresh device opening a populated remote
+ * board would let the (empty) local mirror finish before the WebSocket stream
+ * lands and briefly flash the "empty board" hint.
+ *
+ * Deliberate offline fallback: if the provider can't reach the server within a
+ * bounded grace period (an offline start), readiness falls back to the local
+ * mirror alone so a cached — or genuinely empty offline — board still resolves.
+ * (The hint only ever shows while the board is empty, so a late-arriving
+ * remote board can at worst flash the hint for a beat, never hide real content.)
+ */
+export function useBoardReady(conn: BoardConnection): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const { provider, idb } = conn;
+
+    const settle = () => {
+      if (cancelled) return;
+      if (idbSettled && (provider.synced || offline)) setReady(true);
+    };
+
+    let idbSettled = false;
+    let offline = false;
+    idb.whenSynced.then(() => {
+      idbSettled = true;
+      settle();
+    });
+
+    // Online path: the provider's first full sync (its `synced` flag).
+    const onSync = (synced: boolean) => {
+      if (!synced || cancelled) return;
+      settle();
+    };
+    if (!provider.synced) provider.on("sync", onSync);
+
+    // Offline fallback: never synced and never connected within the grace
+    // window means we started offline — trust the local mirror alone.
+    const OFFLINE_GRACE_MS = 8000;
+    const timer = setTimeout(() => {
+      if (cancelled || provider.synced || provider.wsconnected) return;
+      offline = true;
+      settle();
+    }, OFFLINE_GRACE_MS);
+
+    settle(); // both signals may already be satisfied (cached + warm provider)
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      provider.off("sync", onSync);
+    };
+  }, [conn]);
+  return ready;
+}
+
+/**
+ * True once the local IndexedDB mirror has finished its initial load, i.e.
+ * the board's contents are available offline. This is an initialization
+ * signal, NOT a per-change durability ack — use it to say "available
+ * offline", never "every change is saved".
+ */
+export function useIdbReady(idb: IndexeddbPersistence): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    idb.whenSynced.then(() => {
+      if (!cancelled) setReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [idb]);
+  return ready;
+}
+
 export function useConnectionStatus(provider: WebsocketProvider): ConnectionStatus {
   return useSyncExternalStore(
     (cb) => {

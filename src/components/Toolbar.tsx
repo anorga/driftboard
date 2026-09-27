@@ -43,13 +43,19 @@ export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRe
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2">
       {DRAW_TOOLS.includes(tool) && (
-        <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-2 shadow-lg backdrop-blur-md">
+        <div
+          role="radiogroup"
+          aria-label="Drawing color"
+          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-2 shadow-lg backdrop-blur-md"
+        >
           {PALETTE.map((c) => (
             <button
               key={c.id}
-              title={c.id}
+              role="radio"
+              aria-checked={drawColor === c.id}
+              aria-label={`Color: ${c.id}`}
               onClick={() => setDrawColor(c.id)}
-              className="h-5.5 w-5.5 rounded-full transition-transform hover:scale-110"
+              className="h-5.5 w-5.5 rounded-full transition-transform hover:scale-110 focus-visible:scale-110"
               style={{
                 background: c.vivid,
                 outline: drawColor === c.id ? "2px solid var(--accent)" : "none",
@@ -59,40 +65,51 @@ export function Toolbar({ tool, setTool, drawColor, setDrawColor, canUndo, canRe
           ))}
         </div>
       )}
-      <div className="pointer-events-auto flex max-w-[calc(100vw-12px)] items-center gap-0.5 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-xl backdrop-blur-md sm:gap-1">
+      <div
+        role="toolbar"
+        aria-label="Tools"
+        className="pointer-events-auto flex max-w-[calc(100vw-12px)] items-center gap-0.5 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-1.5 shadow-xl backdrop-blur-md sm:gap-1"
+      >
         {TOOLS.map(({ id, icon: Icon, label, kbd }) => (
           <button
             key={id}
             title={`${label} (${kbd})`}
+            aria-label={label}
+            aria-keyshortcuts={kbd}
+            aria-pressed={tool === id}
             onClick={() => setTool(id)}
-            className={`group relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors sm:h-10 sm:w-10 ${
+            className={`group relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors focus-visible:scale-105 sm:h-10 sm:w-10 ${
               tool === id
                 ? "bg-[var(--accent)] text-white"
                 : "text-[var(--text)] hover:bg-[var(--hover)]"
             }`}
           >
-            <Icon size={19} strokeWidth={2.1} />
+            <Icon aria-hidden="true" size={19} strokeWidth={2.1} />
             <span className="pointer-events-none absolute -top-8 hidden whitespace-nowrap rounded-md bg-[var(--tooltip)] px-2 py-1 text-[11px] font-medium text-[var(--tooltip-text)] shadow group-hover:block">
               {label} · {kbd}
             </span>
           </button>
         ))}
-        <div className="mx-1 h-6 w-px bg-[var(--border)]" />
+        <div aria-hidden="true" className="mx-1 h-6 w-px bg-[var(--border)]" />
         <button
           title="Undo (⌘Z)"
+          aria-label="Undo"
+          aria-keyshortcuts="Meta+Z"
           onClick={onUndo}
           disabled={!canUndo}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30 sm:h-10 sm:w-10"
         >
-          <Undo2 size={19} strokeWidth={2.1} />
+          <Undo2 aria-hidden="true" size={19} strokeWidth={2.1} />
         </button>
         <button
           title="Redo (⇧⌘Z)"
+          aria-label="Redo"
+          aria-keyshortcuts="Shift+Meta+Z"
           onClick={onRedo}
           disabled={!canRedo}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--text)] transition-colors hover:bg-[var(--hover)] disabled:opacity-30 sm:h-10 sm:w-10"
         >
-          <Redo2 size={19} strokeWidth={2.1} />
+          <Redo2 aria-hidden="true" size={19} strokeWidth={2.1} />
         </button>
       </div>
     </div>

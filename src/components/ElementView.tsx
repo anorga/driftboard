@@ -1,6 +1,6 @@
-import { memo } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import type { BoardElement } from "../lib/types";
-import { getColor } from "../lib/constants";
+import { getColor, MAX_TEXT_H } from "../lib/constants";
 import { strokeToPath } from "../lib/stroke";
 
 interface Props {
@@ -13,6 +13,56 @@ interface Props {
   onDoubleClick: (id: string) => void;
   onTextChange: (id: string, text: string) => void;
   onTextCommit: () => void;
+  /**
+   * Called after text changes (edit or remote) with the natural content
+   * height. The board grows the element's stored height to fit — so nothing
+   * is ever silently clipped — up to a sane max, beyond which it scrolls.
+   */
+  onGrow: (id: string, naturalH: number) => void;
+  /** Focus a board element via keyboard: select it (so the action bar works). */
+  onFocusEl: (id: string) => void;
+}
+
+/** Screen-reader label for a board element (used by its focusable wrapper). */
+function elementLabel(el: BoardElement): string {
+  switch (el.type) {
+    case "sticky":
+    case "text":
+      return `${el.type} note: ${el.text || "empty"}`;
+    case "image":
+      return "Image";
+    case "arrow":
+      return "Arrow";
+    case "stroke":
+      return "Drawing";
+    default:
+      return el.type;
+  }
+}
+
+/**
+ * Measure how tall the text content really is. We measure the ACTUAL
+ * content node (which renders at the element's stored width), not a hidden
+ * twin: scrollHeight reports the full content height even when the node is
+ * clipped with overflow:hidden, and reusing the real node avoids duplicating
+ * the text in the DOM (which would confuse text-based locators and screen
+ * readers).
+ */
+function useAutoGrow(
+  enabled: boolean,
+  contentRef: React.RefObject<HTMLElement | null>,
+  text: string,
+  width: number,
+  editing: boolean,
+  onGrow: (naturalH: number) => void,
+) {
+  useEffect(() => {
+    if (!enabled) return;
+    const node = contentRef.current;
+    if (node) onGrow(node.scrollHeight);
+    // `editing` is a dep: the measured node swaps between the display div and
+    // the textarea when the edit state toggles, so remeasure on that change.
+  }, [enabled, text, width, editing, contentRef, onGrow]);
 }
 
 export const ElementView = memo(function ElementView({
@@ -25,8 +75,23 @@ export const ElementView = memo(function ElementView({
   onDoubleClick,
   onTextChange,
   onTextCommit,
+  onGrow,
+  onFocusEl,
 }: Props) {
   const color = getColor(el.color);
+  // ---- Auto-grow (sticky + text elements) ----
+  // Measure the node actually showing the text — the display div normally,
+  // the textarea while editing (both share the same font/width/padding, so
+  // scrollHeight is the true content height even when clipped). A grow-only
+  // callback routed through a ref keeps the memoized view's effect stable.
+  const isTextLike = el.type === "sticky" || el.type === "text";
+  const contentRef = useRef<HTMLElement | null>(null);
+  const growCbRef = useRef<(h: number) => void>(() => {});
+  growCbRef.current = (naturalH) => {
+    if (naturalH > el.h) onGrow(el.id, Math.min(naturalH, MAX_TEXT_H));
+  };
+  const onAutoGrow = useCallback((h: number) => growCbRef.current(h), []);
+  useAutoGrow(isTextLike, contentRef, el.text ?? "", el.w, editing, onAutoGrow);
   const base: React.CSSProperties = {
     position: "absolute",
     left: 0,
@@ -51,9 +116,13 @@ export const ElementView = memo(function ElementView({
   ) : null;
 
   if (el.type === "sticky") {
+    const scrollable = el.h >= MAX_TEXT_H;
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{
           ...base,
           background: color.fill,
@@ -64,9 +133,17 @@ export const ElementView = memo(function ElementView({
         className="select-none"
         onPointerDown={(e) => onPointerDown(e, el.id)}
         onDoubleClick={() => onDoubleClick(el.id)}
+        onFocus={() => onFocusEl(el.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !editing) {
+            e.preventDefault();
+            onDoubleClick(el.id); // keyboard: Enter edits, like double-click
+          }
+        }}
       >
         {editing ? (
           <textarea
+            ref={contentRef as React.RefObject<HTMLTextAreaElement | null>}
             autoFocus
             value={el.text ?? ""}
             onChange={(e) => onTextChange(el.id, e.target.value)}
@@ -76,13 +153,18 @@ export const ElementView = memo(function ElementView({
               e.stopPropagation();
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="h-full w-full resize-none bg-transparent p-3 font-medium outline-none"
+            className={`h-full w-full resize-none bg-transparent p-3 font-medium outline-none ${
+              scrollable ? "overflow-y-auto" : "overflow-hidden"
+            }`}
             style={{ color: color.ink, fontSize: 15, lineHeight: 1.45 }}
             placeholder="Type something…"
           />
         ) : (
           <div
-            className="h-full w-full overflow-hidden whitespace-pre-wrap p-3 font-medium"
+            ref={contentRef as React.RefObject<HTMLDivElement | null>}
+            className={`h-full w-full whitespace-pre-wrap p-3 font-medium ${
+              scrollable ? "overflow-y-auto" : "overflow-hidden"
+            }`}
             style={{ fontSize: 15, lineHeight: 1.45 }}
           >
             {el.text || <span style={{ opacity: 0.4 }}>Double-click to edit</span>}
@@ -94,15 +176,27 @@ export const ElementView = memo(function ElementView({
   }
 
   if (el.type === "text") {
+    const scrollable = el.h >= MAX_TEXT_H;
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{ ...base }}
         onPointerDown={(e) => onPointerDown(e, el.id)}
         onDoubleClick={() => onDoubleClick(el.id)}
+        onFocus={() => onFocusEl(el.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !editing) {
+            e.preventDefault();
+            onDoubleClick(el.id);
+          }
+        }}
       >
         {editing ? (
           <textarea
+            ref={contentRef as React.RefObject<HTMLTextAreaElement | null>}
             autoFocus
             value={el.text ?? ""}
             onChange={(e) => onTextChange(el.id, e.target.value)}
@@ -112,13 +206,18 @@ export const ElementView = memo(function ElementView({
               e.stopPropagation();
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="h-full w-full resize-none bg-transparent font-bold outline-none"
+            className={`h-full w-full resize-none bg-transparent font-bold outline-none ${
+              scrollable ? "overflow-y-auto" : "overflow-hidden"
+            }`}
             style={{ color: color.vivid, fontSize: 22, lineHeight: 1.3 }}
             placeholder="Type…"
           />
         ) : (
           <div
-            className="h-full w-full select-none overflow-hidden whitespace-pre-wrap font-bold"
+            ref={contentRef as React.RefObject<HTMLDivElement | null>}
+            className={`h-full w-full select-none whitespace-pre-wrap font-bold ${
+              scrollable ? "overflow-y-auto" : "overflow-hidden"
+            }`}
             style={{ color: color.vivid, fontSize: 22, lineHeight: 1.3 }}
           >
             {el.text || <span style={{ opacity: 0.4 }}>Double-click to edit</span>}
@@ -133,6 +232,9 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{
           ...base,
           borderRadius: 6,
@@ -141,6 +243,7 @@ export const ElementView = memo(function ElementView({
         }}
         className="select-none"
         onPointerDown={(e) => onPointerDown(e, el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <img
           src={el.src}
@@ -160,6 +263,9 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{
           position: "absolute",
           left: 0,
@@ -171,6 +277,7 @@ export const ElementView = memo(function ElementView({
           touchAction: "none",
         }}
         onPointerDown={(e) => onPointerDown(e, el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <svg style={{ overflow: "visible", display: "block", pointerEvents: "none" }} width={1} height={1}>
           <defs>
@@ -222,9 +329,13 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={base}
         onPointerDown={(e) => onPointerDown(e, el.id)}
         onDoubleClick={() => onDoubleClick(el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <svg width={el.w} height={el.h} style={{ overflow: "visible", display: "block" }}>
           {el.type === "rect" ? (
@@ -260,8 +371,12 @@ export const ElementView = memo(function ElementView({
   return (
     <div
       data-element-id={el.id}
+      role="group"
+      aria-label={elementLabel(el)}
+      tabIndex={interactive ? 0 : -1}
       style={base}
       onPointerDown={(e) => onPointerDown(e, el.id)}
+      onFocus={() => onFocusEl(el.id)}
     >
       <svg width={Math.max(1, el.w)} height={Math.max(1, el.h)} style={{ overflow: "visible", display: "block" }}>
         <path d={path} fill={color.vivid} />
