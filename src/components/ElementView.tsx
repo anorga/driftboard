@@ -53,13 +53,16 @@ function useAutoGrow(
   contentRef: React.RefObject<HTMLElement | null>,
   text: string,
   width: number,
+  editing: boolean,
   onGrow: (naturalH: number) => void,
 ) {
   useEffect(() => {
     if (!enabled) return;
     const node = contentRef.current;
     if (node) onGrow(node.scrollHeight);
-  }, [enabled, text, width, contentRef, onGrow]);
+    // `editing` is a dep: the measured node swaps between the display div and
+    // the textarea when the edit state toggles, so remeasure on that change.
+  }, [enabled, text, width, editing, contentRef, onGrow]);
 }
 
 export const ElementView = memo(function ElementView({
@@ -88,7 +91,7 @@ export const ElementView = memo(function ElementView({
     if (naturalH > el.h) onGrow(el.id, Math.min(naturalH, MAX_TEXT_H));
   };
   const onAutoGrow = useCallback((h: number) => growCbRef.current(h), []);
-  useAutoGrow(isTextLike, contentRef, el.text ?? "", el.w, onAutoGrow);
+  useAutoGrow(isTextLike, contentRef, el.text ?? "", el.w, editing, onAutoGrow);
   const base: React.CSSProperties = {
     position: "absolute",
     left: 0,
@@ -211,6 +214,7 @@ export const ElementView = memo(function ElementView({
           />
         ) : (
           <div
+            ref={contentRef as React.RefObject<HTMLDivElement | null>}
             className={`h-full w-full select-none whitespace-pre-wrap font-bold ${
               scrollable ? "overflow-y-auto" : "overflow-hidden"
             }`}
@@ -228,6 +232,9 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{
           ...base,
           borderRadius: 6,
@@ -236,6 +243,7 @@ export const ElementView = memo(function ElementView({
         }}
         className="select-none"
         onPointerDown={(e) => onPointerDown(e, el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <img
           src={el.src}
@@ -255,6 +263,9 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={{
           position: "absolute",
           left: 0,
@@ -266,6 +277,7 @@ export const ElementView = memo(function ElementView({
           touchAction: "none",
         }}
         onPointerDown={(e) => onPointerDown(e, el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <svg style={{ overflow: "visible", display: "block", pointerEvents: "none" }} width={1} height={1}>
           <defs>
@@ -317,9 +329,13 @@ export const ElementView = memo(function ElementView({
     return (
       <div
         data-element-id={el.id}
+        role="group"
+        aria-label={elementLabel(el)}
+        tabIndex={interactive ? 0 : -1}
         style={base}
         onPointerDown={(e) => onPointerDown(e, el.id)}
         onDoubleClick={() => onDoubleClick(el.id)}
+        onFocus={() => onFocusEl(el.id)}
       >
         <svg width={el.w} height={el.h} style={{ overflow: "visible", display: "block" }}>
           {el.type === "rect" ? (
@@ -355,8 +371,12 @@ export const ElementView = memo(function ElementView({
   return (
     <div
       data-element-id={el.id}
+      role="group"
+      aria-label={elementLabel(el)}
+      tabIndex={interactive ? 0 : -1}
       style={base}
       onPointerDown={(e) => onPointerDown(e, el.id)}
+      onFocus={() => onFocusEl(el.id)}
     >
       <svg width={Math.max(1, el.w)} height={Math.max(1, el.h)} style={{ overflow: "visible", display: "block" }}>
         <path d={path} fill={color.vivid} />

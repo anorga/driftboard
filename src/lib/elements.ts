@@ -102,7 +102,11 @@ export function updateElements(
       for (const [k, v] of Object.entries(patch)) {
         if (k === "points") continue; // points are append-only via appendStrokePoints
         if (k === "text") {
-          writeTextInto(el, typeof v === "string" ? v : "");
+          // `undefined` deletes the field (documented patch contract); any
+          // string routes through the Y.Text diff path instead of a plain
+          // `el.set` (which would clobber the shared type with a scalar).
+          if (v === undefined) el.delete("text");
+          else writeTextInto(el, typeof v === "string" ? v : "");
           continue;
         }
         if (v === undefined) el.delete(k);

@@ -45,13 +45,28 @@ export function HelpModal({ open, onClose }: { open: boolean; onClose: () => voi
       }
       if (e.key !== "Tab" || !panel) return;
       const items = getFocusable();
-      if (items.length === 0) return;
+      if (items.length === 0) {
+        e.preventDefault(); // nowhere to move: hold focus inside
+        return;
+      }
       const first = items[0]!;
       const last = items[items.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) {
+      const active = document.activeElement;
+      // Focusable *items* live inside the dialog, but the dialog panel itself
+      // (tabIndex=-1, the initial focus) is NOT one of them. A raw
+      // Tab/Shift+Tab from the panel — or from anything that has escaped
+      // behind the modal — walks the surrounding DOM order and leaves the
+      // trap, so both cases must be routed back in explicitly.
+      const inTrap = active instanceof Element && panel.contains(active) && active !== panel;
+      if (!inTrap) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
+      } else if (!e.shiftKey && active === last) {
         e.preventDefault();
         first.focus();
       }

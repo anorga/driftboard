@@ -27,7 +27,7 @@ import { ElementView } from "./ElementView";
 import { CursorsOverlay } from "./CursorsOverlay";
 import { LaserOverlay } from "./LaserOverlay";
 import { EmptyHint } from "./EmptyHint";
-import { useRemotePeers } from "../lib/board";
+import { useRemotePeers, useBoardReady } from "../lib/board";
 
 type HandleId = "nw" | "ne" | "sw" | "se";
 
@@ -135,17 +135,9 @@ export function Canvas({
   }, [discardPenFlush, flushPenNow]);
 
   // The empty-state hint must not flash while an existing board's content is
-  // still streaming in from IndexedDB / the server.
-  const [boardReady, setBoardReady] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    conn.idb.whenSynced.then(() => {
-      if (!cancelled) setBoardReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [conn.idb]);
+  // still loading — gate on the local mirror AND the server's initial sync
+  // (with a bounded offline fallback, see useBoardReady).
+  const boardReady = useBoardReady(conn);
 
   // Refs so window-level drag handlers never see stale state
   const cameraRef = useRef(camera);
@@ -767,16 +759,15 @@ export function Canvas({
     [conn],
   );
 
-  // Keyboard focus on a board element selects it, so the selection action bar
-  // (color / nudge / delete / z-order) becomes reachable without a mouse.
+  // Keyboard focus on a board element selects ONLY that element, so focus
+  // moves the selection with it — tabbing through the board can't quietly
+  // accumulate every traversed note into a later bulk delete. Pointer-driven
+  // selection is unaffected: a click's selection update always lands before
+  // the element gains focus and already contains the clicked element, so the
+  // guard below is a no-op for mouse/shift-click flows.
   const onFocusEl = useCallback(
     (id: string) => {
-      setSelection((sel) => {
-        if (sel.has(id)) return sel;
-        const next = new Set(sel);
-        next.add(id);
-        return next;
-      });
+      setSelection((sel) => (sel.has(id) ? sel : new Set([id])));
     },
     [setSelection],
   );
