@@ -8,7 +8,7 @@ import * as awarenessProtocol from "y-protocols/awareness";
 import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import { MESSAGE_AWARENESS, MESSAGE_SYNC, ROOM_NAME_RE, Room, RoomManager, type Conn } from "./rooms.ts";
-import { SnapshotStore } from "./persistence.ts";
+import { SnapshotStore, SAVE_DEBOUNCE_MS } from "./persistence.ts";
 
 /**
  * A minimal y-websocket client wired straight into a Room: it answers the
@@ -133,7 +133,7 @@ describe("RoomManager", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("evicts an empty room after the grace period and persists it", () => {
+  it("evicts an empty room after the grace period and persists it", async () => {
     const manager = new RoomManager(store, 10, 1000);
     const room = manager.get("board1")!;
     const client = new FakeClient(room);
@@ -144,7 +144,9 @@ describe("RoomManager", () => {
     manager.onLeave(room);
     expect(manager.rooms.has("board1")).toBe(true); // still in grace
 
-    vi.advanceTimersByTime(1500);
+    // The eviction callback awaits any in-flight async write, so flush the
+    // microtasks with the async timer advance (not the sync one).
+    await vi.advanceTimersByTimeAsync(1500);
     expect(manager.rooms.has("board1")).toBe(false);
 
     // A fresh room instance restores the snapshot from disk
@@ -199,6 +201,33 @@ describe("SnapshotStore", () => {
       Y.applyUpdate(restored, store.load("room")!);
       expect(restored.getMap("elements").get("x")).toBe(42);
       expect(store.load("nope")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a valid snapshot when an async write and a sync save race", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "driftboard-snap-"));
+    try {
+      const store = new SnapshotStore(dir);
+      const doc = new Y.Doc();
+      doc.getMap("elements").set("v", 1);
+
+      // Queue a debounced (async) write, then let it fire and start in flight.
+      store.scheduleSave("room", doc);
+      await new Promise((r) => setTimeout(r, SAVE_DEBOUNCE_MS + 50));
+
+      // A newer value lands while the async write is still pending — the
+      // eviction/shutdown path must wait for it (awaitSettled) before saving,
+      // or the sync rename could clobber/torn the snapshot.
+      doc.getMap("elements").set("v", 2);
+      await store.awaitSettled("room");
+      store.saveNow("room", doc);
+
+      // The on-disk snapshot must be a valid update holding the newest value.
+      const restored = new Y.Doc();
+      Y.applyUpdate(restored, store.load("room")!);
+      expect(restored.getMap("elements").get("v")).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

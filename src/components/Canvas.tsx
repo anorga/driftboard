@@ -454,17 +454,17 @@ export function Canvas({
         }
         case "resize": {
           const { orig, handle } = drag;
-          const anchor = {
-            x: handle.includes("w") ? orig.x + orig.w : orig.x,
-            y: handle.includes("n") ? orig.y + orig.h : orig.y,
-          };
-          const rect = normalizeRect(anchor, world);
-          updateElement(conn.doc, conn.elements, drag.id, {
-            x: rect.x,
-            y: rect.y,
-            w: Math.max(24, rect.w),
-            h: Math.max(24, rect.h),
-          });
+          const MIN = 24;
+          // Clamp the dragged edge against the fixed (opposite) corner per axis
+          // so the anchored corner never moves and the box can't shrink below
+          // MIN. (The old normalizeRect + clamp moved the opposite corner.)
+          let x = orig.x, y = orig.y, w = orig.w, h = orig.h;
+          const left = orig.x, right = orig.x + orig.w, top = orig.y, bottom = orig.y + orig.h;
+          if (handle.includes("e")) w = Math.max(MIN, world.x - left);
+          if (handle.includes("w")) { x = Math.min(world.x, right - MIN); w = right - x; }
+          if (handle.includes("s")) h = Math.max(MIN, world.y - top);
+          if (handle.includes("n")) { y = Math.min(world.y, bottom - MIN); h = bottom - y; }
+          updateElement(conn.doc, conn.elements, drag.id, { x, y, w, h });
           break;
         }
       }

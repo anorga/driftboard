@@ -111,6 +111,13 @@ const wss = new WebSocketServer({
 });
 
 wss.on("connection", (conn, req) => {
+  // An unhandled "error" event on a client socket is a Node uncaught
+  // exception and takes the whole relay down — malformed frames and socket
+  // failures must close just that connection.
+  conn.on("error", (err) => {
+    console.error(`websocket error in room "${(req.url || "").slice(1)}"`, err);
+    conn.terminate();
+  });
   conn.binaryType = "arraybuffer";
   const origin = req.headers.origin;
   if (allowedOrigins.length > 0 && origin && !allowedOrigins.includes(origin)) {
@@ -160,8 +167,12 @@ wss.on("connection", (conn, req) => {
 // Persist everything before going down (deploys, ctrl-c).
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    rooms.flush();
-    process.exit(0);
+    void (async () => {
+      await rooms.flush();
+      // Drop open sockets so the process can actually exit.
+      wss.close();
+      process.exit(0);
+    })();
   });
 }
 

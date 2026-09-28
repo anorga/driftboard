@@ -17,6 +17,27 @@ const NOTES = [
   { id: 2, text: "No sign-up.\nJust a link.", bg: "#bfdbfe", ink: "#1e3a8a", tilt: 1.5, w: 140 },
 ];
 
+// Stable module-level path functions: passing inline arrow functions to
+// FakeCursor would recreate them on every render (each note drag re-renders
+// the parent), restarting the animation effect and re-randomizing its time
+// origin. Constants keep the effect dep stable so only a real box resize
+// restarts the loop.
+const AVA_PATH = (t: number) => ({
+  x: 0.5 + 0.32 * Math.sin(t * 0.5) * Math.cos(t * 0.21),
+  y: 0.45 + 0.28 * Math.sin(t * 0.34 + 1.2),
+});
+const SAM_PATH = (t: number) => ({
+  x: 0.42 + 0.3 * Math.sin(t * 0.38 + 2.4),
+  y: 0.5 + 0.3 * Math.sin(t * 0.52 + 0.6) * Math.cos(t * 0.18),
+});
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 function FakeCursor({
   name,
   color,
@@ -30,6 +51,14 @@ function FakeCursor({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // A reduced-motion user gets a static cursor, not an animated one.
+    if (prefersReducedMotion()) {
+      if (ref.current) {
+        const p = path(0);
+        ref.current.style.transform = `translate(${p.x * size.w}px, ${p.y * size.h}px)`;
+      }
+      return;
+    }
     let raf = 0;
     const start = performance.now() + Math.random() * 2000;
     const tick = () => {
@@ -46,9 +75,9 @@ function FakeCursor({
 
   return (
     <div ref={ref} className="pointer-events-none absolute left-0 top-0 z-20 will-change-transform">
-      <svg width="20" height="20" viewBox="0 0 24 24">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
         <path
-          d="M5.5 3.2 19.2 11c.8.45.6 1.65-.3 1.83l-5.8 1.15-2.6 5.35c-.4.83-1.62.7-1.84-.2L4.2 4.4c-.2-.85.65-1.6 1.3-1.2Z"
+          d="M5.5 3.2 19.2 11c.8.45.6 1.65-.3 1.83l-5.8 1.15-2.6 5.35c-.4.83-1.62.7-1.84-.2L4.2 4.4c-.2-.85.65-1.65 1.3-1.2Z"
           fill={color}
           stroke="white"
           strokeWidth="1.4"
@@ -105,6 +134,31 @@ export function HeroDemo() {
     drag.current = null;
   };
 
+  // Arrow-key nudge for keyboard users (Shift = bigger step), matching the
+  // real board's nudge behavior. Notes are focusable controls, not just
+  // pointer-drag targets.
+  const onNoteKey = (e: React.KeyboardEvent, id: number) => {
+    const step = e.shiftKey ? 0.08 : 0.02;
+    const move = (dx: number, dy: number) =>
+      setPositions((prev) =>
+        prev.map((p, i) =>
+          i === id
+            ? {
+                x: Math.min(0.82, Math.max(0, p.x + dx)),
+                y: Math.min(0.78, Math.max(0, p.y + dy)),
+              }
+            : p,
+        ),
+      );
+    switch (e.key) {
+      case "ArrowLeft": e.preventDefault(); move(-step, 0); break;
+      case "ArrowRight": e.preventDefault(); move(step, 0); break;
+      case "ArrowUp": e.preventDefault(); move(0, -step); break;
+      case "ArrowDown": e.preventDefault(); move(0, step); break;
+      default: return;
+    }
+  };
+
   return (
     <div
       ref={boxRef}
@@ -133,7 +187,7 @@ export function HeroDemo() {
       </div>
 
       {/* pre-drawn pen stroke */}
-      <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 560 420" preserveAspectRatio="none">
+      <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 560 420" preserveAspectRatio="none" aria-hidden="true">
         <path
           d="M60 330 C 120 240, 170 350, 230 290 S 330 220, 380 280"
           fill="none"
@@ -153,7 +207,10 @@ export function HeroDemo() {
       {NOTES.map((n, i) => (
         <div
           key={n.id}
-          className="absolute z-10 cursor-grab rounded-md p-3 text-[13px] font-semibold shadow-lg active:cursor-grabbing"
+          tabIndex={0}
+          role="button"
+          aria-label={`Move ${n.text.replace(/\n/g, " ")} (arrow keys)`}
+          className="absolute z-10 cursor-grab rounded-md p-3 text-[13px] font-semibold shadow-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] active:cursor-grabbing"
           style={{
             left: 0,
             top: 0,
@@ -165,6 +222,7 @@ export function HeroDemo() {
             ["--tilt" as string]: `${n.tilt}deg`,
           }}
           onPointerDown={(e) => onNoteDown(e, n.id)}
+          onKeyDown={(e) => onNoteKey(e, n.id)}
         >
           {n.text}
         </div>
@@ -175,19 +233,13 @@ export function HeroDemo() {
         name="Ava"
         color="#ec4899"
         size={size}
-        path={(t) => ({
-          x: 0.5 + 0.32 * Math.sin(t * 0.5) * Math.cos(t * 0.21),
-          y: 0.45 + 0.28 * Math.sin(t * 0.34 + 1.2),
-        })}
+        path={AVA_PATH}
       />
       <FakeCursor
         name="Sam"
         color="#3b82f6"
         size={size}
-        path={(t) => ({
-          x: 0.42 + 0.3 * Math.sin(t * 0.38 + 2.4),
-          y: 0.5 + 0.3 * Math.sin(t * 0.52 + 0.6) * Math.cos(t * 0.18),
-        })}
+        path={SAM_PATH}
       />
     </div>
   );

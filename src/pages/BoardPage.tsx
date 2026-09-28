@@ -67,12 +67,19 @@ export function BoardPage() {
     touchRecentBoard(roomId, boardName || "Untitled board");
   }, [roomId, boardName]);
 
-  // Keep the recents thumbnail fresh (debounced so drawing doesn't thrash it)
+  // Keep the recents thumbnail fresh (debounced so drawing doesn't thrash it).
+  // The generation token guards against an older render (e.g. one containing a
+  // slow image) finishing after a newer one and overwriting the thumbnail with
+  // obsolete content.
+  const thumbGen = useRef(0);
   useEffect(() => {
     if (els.length === 0) return;
+    const gen = ++thumbGen.current;
     const timer = setTimeout(() => {
       void renderBoardThumbnail(els).then((thumb) => {
-        if (thumb) touchRecentBoard(roomId, boardName || "Untitled board", thumb);
+        if (thumb && gen === thumbGen.current) {
+          touchRecentBoard(roomId, boardName || "Untitled board", thumb);
+        }
       });
     }, 2000);
     return () => clearTimeout(timer);
