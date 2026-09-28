@@ -80,9 +80,9 @@ export function TopBar({ doc, meta, provider, awareness, user, idbReady, onBoard
   const offlineReady = status === "disconnected" && idbReady;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between p-4">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-wrap items-start justify-between gap-2 p-4">
       {/* Left: logo + board name + status */}
-      <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--panel)] py-2 pl-3 pr-4 shadow-lg backdrop-blur-md">
+      <div className="pointer-events-auto flex min-w-0 items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--panel)] py-2 pl-3 pr-4 shadow-lg backdrop-blur-md max-w-full">
         <Link to="/" title="Driftboard home" className="shrink-0">
           <Logo size={26} />
         </Link>
@@ -91,7 +91,7 @@ export function TopBar({ doc, meta, provider, awareness, user, idbReady, onBoard
           onChange={(e) => setName(e.target.value)}
           placeholder="Untitled board"
           aria-label="Board name"
-          className="w-44 bg-transparent text-sm font-semibold text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
+          className="w-44 min-w-0 bg-transparent text-sm font-semibold text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
         />
         <div
           role="status"
@@ -114,7 +114,7 @@ export function TopBar({ doc, meta, provider, awareness, user, idbReady, onBoard
       </div>
 
       {/* Right: presence + share + theme */}
-      <div className="pointer-events-auto flex items-center gap-3" data-follow-ui>
+      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-end gap-2 sm:gap-3" data-follow-ui>
         {followingId != null && (
           <button
             onClick={() => onToggleFollow(followingId)}

@@ -17,6 +17,16 @@ function nextOrder(elements: Y.Map<Y.Map<unknown>>): number {
   return max + 1;
 }
 
+/** Highest z-order on the board (0 when empty). Batch ops read this once. */
+function maxOrder(elements: Y.Map<Y.Map<unknown>>): number {
+  let max = 0;
+  elements.forEach((el) => {
+    const o = (el.get("order") as number) ?? 0;
+    if (o > max) max = o;
+  });
+  return max;
+}
+
 export interface NewElement {
   type: ElementType;
   x: number;
@@ -121,7 +131,7 @@ export function updateElements(
  * typing into the same note merge instead of last-write-wins. The migration
  * (scalar → Y.Text) and the diff happen in one transaction, so a legacy note
  * is upgraded and edited in a single undo step. Callers must be inside a
- * `doc.transact` (see updateElements / setText).
+ * `doc.transact` (see updateElements).
  */
 function writeTextInto(el: Y.Map<unknown>, to: string) {
   const existing = el.get("text");
@@ -135,13 +145,6 @@ function writeTextInto(el: Y.Map<unknown>, to: string) {
     el.set("text", t);
   }
   applyTextDiff(t, to);
-}
-
-/** Set an element's text with collaborative (character-level) semantics. */
-export function setText(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, id: string, to: string) {
-  const el = elements.get(id);
-  if (!el) return;
-  doc.transact(() => writeTextInto(el, to), LOCAL_ORIGIN);
 }
 
 /**
@@ -181,6 +184,10 @@ export function duplicateElements(
     if (elements.has(id)) idMap.set(id, nanoid(10));
   }
   doc.transact(() => {
+    // Read the board's max order once and hand out fresh orders locally —
+    // one full scan instead of a scan per element (O(n) total). Starts at
+    // max+1, exactly what the old per-element nextOrder() produced.
+    let order = maxOrder(elements) + 1;
     for (const [id, newId] of idMap) {
       const src = elements.get(id);
       if (!src) continue;
@@ -190,7 +197,7 @@ export function duplicateElements(
         id: newId,
         x: json.x + 24,
         y: json.y + 24,
-        order: nextOrder(elements),
+        order: order++,
         startRef: json.startRef && (idMap.get(json.startRef) ?? json.startRef),
         endRef: json.endRef && (idMap.get(json.endRef) ?? json.endRef),
       });
@@ -225,6 +232,8 @@ export function pasteElements(
   const dy = at.y - (minY + maxY) / 2;
   const idMap = new Map(copied.map((el) => [el.id, nanoid(10)]));
   doc.transact(() => {
+    // One scan for the max order; each pasted element gets the next slot.
+    let order = maxOrder(elements) + 1;
     for (const el of copied) {
       const newId = idMap.get(el.id)!;
       elements.set(
@@ -234,7 +243,7 @@ export function pasteElements(
           id: newId,
           x: el.x + dx,
           y: el.y + dy,
-          order: nextOrder(elements),
+          order: order++,
           startRef: el.startRef ? idMap.get(el.startRef) : undefined,
           endRef: el.endRef ? idMap.get(el.endRef) : undefined,
         }),
@@ -251,7 +260,10 @@ export function bringToFront(doc: Y.Doc, elements: Y.Map<Y.Map<unknown>>, ids: I
       .map((id) => elements.get(id))
       .filter((el): el is Y.Map<unknown> => !!el)
       .sort((a, b) => (((a.get("order") as number) ?? 0) - ((b.get("order") as number) ?? 0)));
-    for (const el of sorted) el.set("order", nextOrder(elements));
+    // One scan, then assign contiguous fresh orders — preserves the relative
+    // order of the batch while lifting the whole thing above everything else.
+    let order = maxOrder(elements) + 1;
+    for (const el of sorted) el.set("order", order++);
   }, LOCAL_ORIGIN);
 }
 

@@ -175,7 +175,7 @@ export function Landing() {
                       <div className="mt-1 text-[12px] text-[var(--muted)]">Opened {timeAgo(b.visitedAt)}</div>
                     </div>
                   </Link>
-                  <div className="absolute right-2 top-2 hidden items-center gap-0.5 rounded-lg bg-[var(--panel-solid,var(--panel))] p-0.5 shadow group-hover:flex">
+                  <div className="absolute right-2 top-2 hidden items-center gap-0.5 rounded-lg bg-[var(--panel-solid,var(--panel))] p-0.5 shadow group-hover:flex group-focus-within:flex">
                     <button
                       title="Remove from recents"
                       onClick={() => forget(b.id)}

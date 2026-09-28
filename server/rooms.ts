@@ -194,9 +194,12 @@ export class RoomManager {
   onLeave(room: Room) {
     if (!this.store) return;
     if (room.conns.size > 0 || this.evictTimers.has(room.name)) return;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       this.evictTimers.delete(room.name);
       if (room.conns.size > 0) return;
+      // Wait for any in-flight async (debounced) write to this room so the
+      // synchronous save below can't rename over it.
+      await this.store?.awaitSettled(room.name);
       this.store?.saveNow(room.name, room.doc);
       room.destroy();
       this.rooms.delete(room.name);
@@ -205,9 +208,16 @@ export class RoomManager {
     this.evictTimers.set(room.name, timer);
   }
 
-  /** Persist every room immediately (shutdown path). */
-  flush() {
+  /**
+   * Persist every room immediately (shutdown path). Awaits any in-flight
+   * async writes per room so they can't race the final synchronous save; the
+   * caller awaits this before `process.exit`.
+   */
+  async flush() {
     if (!this.store) return;
-    this.rooms.forEach((room, name) => this.store!.saveNow(name, room.doc));
+    for (const [name, room] of this.rooms) {
+      await this.store.awaitSettled(name);
+      this.store.saveNow(name, room.doc);
+    }
   }
 }

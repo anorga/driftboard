@@ -17,7 +17,7 @@ export function SelectionActions({ count, onColor, onDuplicate, onDelete, onFron
     <div
       role="toolbar"
       aria-label="Selection actions"
-      className="pointer-events-auto absolute left-1/2 top-20 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] py-2 pl-4 pr-2 shadow-lg backdrop-blur-md"
+      className="pointer-events-auto absolute left-1/2 top-20 z-20 flex -translate-x-1/2 items-center gap-2 overflow-x-auto rounded-full border border-[var(--border)] bg-[var(--panel)] py-2 pl-4 pr-2 shadow-lg backdrop-blur-md max-w-[calc(100vw-1rem)]"
     >
       <span aria-live="polite" className="text-[12px] font-semibold text-[var(--muted)]">
         {count} selected
