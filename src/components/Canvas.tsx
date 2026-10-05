@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BoardConnection } from "../lib/board";
 import type { BoardElement, Camera, Tool, UserInfo } from "../lib/types";
 import { GRID_SIZE, STICKY_DEFAULT } from "../lib/constants";
+import { normalizeWheelDelta } from "../lib/wheel";
 import {
   screenToWorld,
   zoomAt,
@@ -192,34 +193,73 @@ export function Canvas({
   }, [conn, tool]);
 
   // ---- Cursor chat (press / to talk at your cursor) ----
+  // A sent message lingers on peers for ~4s via this clear timer. Every path
+  // that replaces or abandons a message cancels it first, and it nulls its
+  // own ref on expiry so no stale handle survives.
+  const cancelChatClear = useCallback(() => {
+    if (chatClearTimer.current) {
+      clearTimeout(chatClearTimer.current);
+      chatClearTimer.current = null;
+    }
+  }, []);
+
   const closeChat = useCallback(
     (keepMessage: boolean) => {
       setChat(null);
-      if (chatClearTimer.current) clearTimeout(chatClearTimer.current);
+      cancelChatClear();
       if (keepMessage) {
-        chatClearTimer.current = setTimeout(
-          () => conn.awareness.setLocalStateField("chat", null),
-          4000,
-        );
+        chatClearTimer.current = setTimeout(() => {
+          chatClearTimer.current = null;
+          conn.awareness.setLocalStateField("chat", null);
+        }, 4000);
       } else {
         conn.awareness.setLocalStateField("chat", null);
       }
     },
-    [conn],
+    [conn, cancelChatClear],
   );
 
+  // Opening a draft always starts from a clean slate: a pending clear from an
+  // earlier message is cancelled AND the old awareness text is replaced
+  // immediately, so an old timer can neither erase a reopened draft nor let
+  // old text linger while a blank input is open.
+  const openChat = useCallback(
+    (screen: Point) => {
+      cancelChatClear();
+      conn.awareness.setLocalStateField("chat", null);
+      setChat({ screen, text: "" });
+    },
+    [conn, cancelChatClear],
+  );
+
+  // Deps on openChat (and through it the current conn) so the keyboard
+  // handler can never act through a previous connection's awareness.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable) return;
       if (e.key === "/") {
         e.preventDefault();
-        setChat({ screen: lastScreen.current, text: "" });
+        openChat(lastScreen.current);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [openChat]);
+
+  // Changing room (conn swap while Canvas stays mounted) or leaving the
+  // board retires all pending chat work: an unsubmitted draft must not
+  // survive into the next room, and an armed clear timer must never fire a
+  // stale awareness write afterwards. The old connection goes away entirely,
+  // taking its awareness state with it — nothing to null on it (and we must
+  // not touch an awareness that may already be destroyed).
+  useEffect(
+    () => () => {
+      cancelChatClear();
+      setChat(null);
+    },
+    [conn, cancelChatClear],
+  );
 
   // ---- Images: paste anywhere, or drop files onto the canvas ----
   const insertImages = useCallback(
@@ -306,12 +346,17 @@ export function Canvas({
     if (!vp) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const screen = { x: e.clientX - vp.getBoundingClientRect().left, y: e.clientY - vp.getBoundingClientRect().top };
+      const rect = vp.getBoundingClientRect();
+      const screen = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      // Read deltaMode before interpreting the deltas: line/page units are
+      // normalized to CSS pixels under the documented policy (see wheel.ts),
+      // pixel events pass through with the exact existing sensitivity.
+      const { deltaX, deltaY } = normalizeWheelDelta(e, rect);
       if (e.ctrlKey || e.metaKey) {
-        const factor = Math.exp(-e.deltaY * 0.01);
+        const factor = Math.exp(-deltaY * 0.01);
         setCamera((cam) => zoomAt(cam, screen, cam.z * factor));
       } else {
-        setCamera((cam) => ({ ...cam, x: cam.x + e.deltaX / cam.z, y: cam.y + e.deltaY / cam.z }));
+        setCamera((cam) => ({ ...cam, x: cam.x + deltaX / cam.z, y: cam.y + deltaY / cam.z }));
       }
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
